@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 import datetime
-from typing import List
+from typing import List, Optional
 
 
 class StepMetrics(BaseModel):

@@ -1,4 +1,7 @@
 import builtins
+import os
+import resource
+import multiprocessing
 from typing import List, Dict
 from pydantic import BaseModel, Field
 
@@ -32,19 +35,92 @@ class Sandbox:
 
     def _get_safe_globals(self) -> Dict:
         safe_builtins: Dict = {}
+        safe_builtins["print"] = getattr(builtins, "print")
 
-        safe_builtins['print'] = getattr(builtins, print)
+        original_import = builtins.__import__
 
-        return {
-            "__builtins__": safe_builtins
-        }
+        def safe_import(name, globals=None, locals=None, fromlist=(), level=0):
+            allowed = False
+            for auth_import in self.config.authorized_imports:
+                if auth_import.endswith(".*"):
+                    base_module = auth_import[:-2]
+                    if (name == base_module
+                            or name.startswith(base_module + ".")):
+                        allowed = True
+                        break
+                elif name == auth_import:
+                    allowed = True
+                    break
 
-    def execute(self, code_string: str) -> None:
-        safe_globals: Dict = self._get_safe_globals()
-        safe_locals: Dict = {}
+            if not allowed:
+                raise ImportError(f"Import denied : '{name}'.")
+            return original_import(name, globals, locals, fromlist, level)
 
+        original_open = builtins.open
+
+        def safe_open(
+            file,
+            mode="r",
+            buffering=-1,
+            encoding=None,
+            errors=None,
+            newline=None,
+            closefd=True,
+            opener=None,
+        ):
+            abs_path = os.path.abspath(file)
+            is_allowed = any(
+                abs_path.startswith(os.path.abspath(d))
+                for d in self.config.allowed_directories
+            )
+            if not is_allowed:
+                raise PermissionError(f"Access denied to the repertory : {file}")
+            return original_open(
+                file, mode, buffering, encoding, errors,
+                newline, closefd, opener
+            )
+
+        safe_builtins["__import__"] = safe_import
+        safe_builtins["open"] = safe_open
+
+        return {"__builtins__": safe_builtins}
+
+    def _worker(self, code_string: str, queue: multiprocessing.Queue):
         try:
-            exec(code_string, safe_globals, safe_locals)
-            return ("Code run perfecly.")
+            mem_bytes = self.config.max_memory_mb * 1024 * 1024
+            resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
+
+            resource.setrlimit(
+                resource.RLIMIT_CPU,
+                (
+                    self.config.max_execution_time_seconds,
+                    self.config.max_execution_time_seconds,
+                ),
+            )
+
+            safe_globals = self._get_safe_globals()
+            exec(code_string, safe_globals, {})
+            queue.put("Code run perfectly.")
+
         except Exception as e:
-            return (f"Code failed ! Error: {e}")
+            queue.put(f"Code failed ! Error: {type(e).__name__} - {e}")
+
+    def execute(self, code_string: str) -> str:
+        queue = multiprocessing.Queue()
+        process = multiprocessing.Process(
+            target=self._worker, args=(code_string, queue)
+        )
+
+        process.start()
+        process.join(self.config.max_execution_time_seconds + 1)
+
+        if process.is_alive():
+            process.terminate()
+            process.join()
+            return ("Code failed ! Error: TimeoutException - Max "
+                    "execution time reached.")
+
+        if not queue.empty():
+            return queue.get()
+
+        return "Code failed ! Error: Process crashed unexpectedly."

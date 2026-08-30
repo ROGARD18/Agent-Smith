@@ -1,9 +1,11 @@
 import builtins
 import os
+import io
 import resource
 import multiprocessing
 from typing import List, Dict
 from pydantic import BaseModel, Field
+from contextlib import redirect_stderr, redirect_stdout
 
 
 class SandboxConfig(BaseModel):
@@ -99,8 +101,21 @@ class Sandbox:
             )
 
             safe_globals = self._get_safe_globals()
-            exec(code_string, safe_globals, {})
-            queue.put("Code run perfectly.")
+
+            def final_answer(solution) -> None:
+                print(f"[FINAL ANSWER] : {solution}")
+
+            safe_globals['final_answer'] = final_answer
+
+            capture_sortie = io.StringIO()
+
+            with redirect_stdout(capture_sortie), redirect_stderr(capture_sortie):
+                exec(code_string, safe_globals, {})
+
+            observation = capture_sortie.getvalue()
+            if observation == "":
+                observation = "Code executed without errors"
+            queue.put(observation)
 
         except Exception as e:
             queue.put(f"Code failed ! Error: {type(e).__name__} - {e}")

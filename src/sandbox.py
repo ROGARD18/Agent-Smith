@@ -3,7 +3,7 @@ import os
 import io
 import resource
 import multiprocessing
-from typing import List, Dict
+from typing import List, Dict, Any
 from pydantic import BaseModel, Field
 from contextlib import redirect_stderr, redirect_stdout
 
@@ -22,12 +22,12 @@ class SandboxConfig(BaseModel):
             "heapq", "bisect", "copy",
             "string", "random",
             "datetime", "datetime.*",
-            "array", "cmath",
+            "array", "cmath", "time"
             ])
     allowed_directories: List[str] = Field(default_factory=lambda: [
             "/testbed", "/tmp/agent"
             ])
-    max_execution_time_seconds: int = 30
+    max_execution_time_seconds: int = 1
     max_memory_mb: int = 512
 
 
@@ -76,7 +76,8 @@ class Sandbox:
                 for d in self.config.allowed_directories
             )
             if not is_allowed:
-                raise PermissionError(f"Access denied to the repertory : {file}")
+                raise PermissionError("Access denied to the "
+                                      f"repertory : {file}")
             return original_open(
                 file, mode, buffering, encoding, errors,
                 newline, closefd, opener
@@ -109,7 +110,8 @@ class Sandbox:
 
             capture_sortie = io.StringIO()
 
-            with redirect_stdout(capture_sortie), redirect_stderr(capture_sortie):
+            with (redirect_stdout(capture_sortie),
+                  redirect_stderr(capture_sortie)):
                 exec(code_string, safe_globals, {})
 
             observation = capture_sortie.getvalue()
@@ -121,7 +123,7 @@ class Sandbox:
             queue.put(f"Code failed ! Error: {type(e).__name__} - {e}")
 
     def execute(self, code_string: str) -> str:
-        queue = multiprocessing.Queue()
+        queue: Any = multiprocessing.Queue()
         process = multiprocessing.Process(
             target=self._worker, args=(code_string, queue)
         )

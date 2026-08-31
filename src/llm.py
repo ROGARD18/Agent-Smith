@@ -6,7 +6,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-def generate_response(prompt: str, model: str = "nvidia/nemotron-3.5-lightning:free") -> str:
+def generate_response(prompt: str,
+                      model: str = "nvidia/nemotron-3.5-lightning:free"
+                      ) -> str:
     """Give a prompt to the LLM and return the answer."""
     api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:

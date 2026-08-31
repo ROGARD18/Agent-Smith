@@ -77,7 +77,8 @@ class Sandbox:
                 for d in self.config.allowed_directories
             )
             if not is_allowed:
-                raise PermissionError(f"Access denied to the repertory : {file}")
+                raise PermissionError("Access denied to the "
+                                      f"repertory : {file}")
             return original_open(
                 file, mode, buffering, encoding, errors,
                 newline, closefd, opener
@@ -125,7 +126,8 @@ class Sandbox:
 
             capture_sortie = io.StringIO()
 
-            with redirect_stdout(capture_sortie), redirect_stderr(capture_sortie):
+            with (redirect_stdout(capture_sortie),
+                  redirect_stderr(capture_sortie)):
                 exec(code_string, safe_globals, {})
 
             # If execution reaches here, final_answer wasn't called. Return observation.
@@ -144,7 +146,11 @@ class Sandbox:
             error_msg = f"{type(e).__name__}: {e}\nOutput before error:\n{obs}"
             queue.put({"status": "error", "data": error_msg})
 
-    def execute(self, code_string: str) -> str:
+    def execute(self, code_string: str) -> Dict[str, Any]:
+        """
+        Executes code and returns a dict with 'status' and 'data'.
+        Statuses: 'observation', 'final_answer', or 'error'.
+        """
         queue = multiprocessing.Queue()
         process = multiprocessing.Process(
             target=self._worker, args=(code_string, queue)

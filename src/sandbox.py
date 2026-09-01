@@ -39,15 +39,17 @@ class Sandbox:
         self.mcp_tools = mcp_tools or {}
 
     def _get_safe_globals(self) -> Dict:
-        safe_builtins: Dict = {}
+        """
+        Remove dangerous builtins from the sandbox
+        """
+        safe_builtins: Dict = builtins.__dict__.copy()
         
-        # 1. Populate standard harmless builtins to prevent NameErrors
+        # Populate standard harmless builtins to prevent NameErrors
         dangerous_builtins = {'eval', 'exec', 'compile', 'globals', 'locals', 'vars', 'input'}
-        for name, obj in builtins.__dict__.items():
-            if name not in dangerous_builtins:
-                safe_builtins[name] = obj
+        for name in dangerous_builtins:
+            safe_builtins.pop(name, None)
 
-        # 2. Secure Import Function
+        # Secure Import Function
         original_import = builtins.__import__
 
         def safe_import(name, globals=None, locals=None, fromlist=(), level=0):
@@ -66,11 +68,17 @@ class Sandbox:
                 raise ImportError(f"Import denied: '{name}'.")
             return original_import(name, globals, locals, fromlist, level)
 
-        # 3. Secure Open Function
+        # Secure Open Function
         original_open = builtins.open
 
-        def safe_open(file, mode="r", buffering=-1, encoding=None, errors=None, newline=None, closefd=True, opener=None):
-            # Use realpath to resolve symlinks and relative traversals like '../'
+        def safe_open(file, mode="r", buffering=-1, encoding=None,
+                      errors=None, newline=None, closefd=True, opener=None):
+            """
+            Use realpath to resolve symlinks and
+            relative traversals like '../'
+            Return:
+                PermissionError if the path is not in the allowed directorie
+            """
             abs_path = os.path.realpath(file)
             is_allowed = any(
                 abs_path.startswith(os.path.realpath(d))
@@ -94,13 +102,17 @@ class Sandbox:
         return safe_globals
 
     def _disable_network(self):
-        """Overrides socket creation to block network access."""
+        """
+        Overrides socket creation to block network access.
+        Guarantees the llm to rely on it's own reasoning.
+        Prevent fetching of malicious payloads.
+        """
         def disabled_socket(*args, **kwargs):
             raise PermissionError("Network access is disabled in the sandbox.")
         socket.socket = disabled_socket
 
     def _worker(self, code_string: str, queue: multiprocessing.Queue):
-        capture_sortie = io.StringIO()
+        capture_output = io.StringIO()
         try:
             # Apply memory and CPU limits
             mem_bytes = self.config.max_memory_mb * 1024 * 1024
@@ -124,14 +136,14 @@ class Sandbox:
 
             safe_globals['final_answer'] = final_answer
 
-            capture_sortie = io.StringIO()
+            capture_output = io.StringIO()
 
-            with (redirect_stdout(capture_sortie),
-                  redirect_stderr(capture_sortie)):
+            with (redirect_stdout(capture_output),
+                  redirect_stderr(capture_output)):
                 exec(code_string, safe_globals, {})
 
             # If execution reaches here, final_answer wasn't called. Return observation.
-            observation = capture_sortie.getvalue()
+            observation = capture_output.getvalue()
             if not observation:
                 observation = "Code executed successfully without any output."
             queue.put({"status": "observation", "data": observation})
@@ -142,7 +154,7 @@ class Sandbox:
                 queue.put({"status": "error", "data": "Process exited unexpectedly."})
         except BaseException as e:
             # Catch BaseException to catch SystemExit/KeyboardInterrupt if raised maliciously
-            obs = capture_sortie.getvalue()
+            obs = capture_output.getvalue()
             error_msg = f"{type(e).__name__}: {e}\nOutput before error:\n{obs}"
             queue.put({"status": "error", "data": error_msg})
 

@@ -29,13 +29,13 @@ class TokenManager:
         print(f"[*] Switching to API key index: {self.current_index}")
 
 
-def generate_response(
-    prompt: str,
+def generate_chat_response(
+    messages: List[Dict[str, str]],
     token_manager: TokenManager,
     model: str = "nvidia/nemotron-3.5-lightning:free",
     max_retries: int = 5
 ) -> Dict[str, Any]:
-    """Sends prompt to LLM with automatic token rotation, retries, and metric tracking."""
+    """Sends a full chat history to the LLM API with token rotation, retries, and metric tracking."""
     api_url = "https://openrouter.ai/api/v1"
     
     for attempt in range(max_retries):
@@ -47,7 +47,7 @@ def generate_response(
             headers={"Authorization": f"Bearer {api_key}"},
             json={
                 "model": model,
-                "messages": [{"role": "user", "content": prompt}]
+                "messages": messages
             }
         )
         

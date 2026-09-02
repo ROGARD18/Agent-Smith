@@ -1,14 +1,11 @@
 import json
 import argparse
 from pathlib import Path
-from typing import List, Optional
-from pydantic import BaseModel
 from dotenv import load_dotenv
-
 
 from src.sandbox import Sandbox, SandboxConfig
 from src.llm import TokenManager
-from agent import AgentOrchestrator
+from src.agent import AgentOrchestrator
 from src.models import MBPPTaskInput
 
 load_dotenv()
@@ -23,13 +20,11 @@ def main():
     
     args = parser.parse_args()
 
-    # Load the task data
+    # Load task data
     with open(args.task_file, "r", encoding="utf-8") as f:
         task_data = json.load(f)
     task = MBPPTaskInput(**task_data)
 
-    # Setup Sandbox and Tools 
-    # For MBPP, the sandbox itself runs the Python code, so external tools are minimal.
     mcp_tools = {} 
     sandbox_manual = "You can write executable Python code to test your functions."
     
@@ -51,7 +46,6 @@ def main():
         "using `final_answer(solution_code_string)`. Ensure the submitted solution contains all necessary imports."
     )
 
-    # Format the asserts into a readable block
     tests_str = "\n".join(task.test_list)
     
     task_prompt = (
@@ -60,16 +54,16 @@ def main():
         "Write the code, test it with the asserts, and submit the final function as a string via final_answer()."
     )
 
-    orchestrator = AgentOrchestrator(sandbox, token_manager, args.model_name, args.provider_url)
+    orchestrator = AgentOrchestrator(sandbox, token_manager, args.model_name)
     
     solution_output = orchestrator.run(
-        task=task.task_id,
+        task_id=str(task.task_id),
+        benchmark="mbpp",
         system_prompt=system_prompt,
         task_prompt=task_prompt,
         max_iterations=10
     )
 
-    # Dump the output
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     

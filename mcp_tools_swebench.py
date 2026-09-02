@@ -30,7 +30,6 @@ def read_file(filepath: str, start_line: int, end_line: int) -> str:
             lines = f.readlines()
         
         output = []
-        # 1-indexed lines to match `cat -n` style
         start = max(1, start_line)
         end = min(len(lines), end_line)
         
@@ -159,8 +158,3 @@ def get_patch() -> str:
         return result.stdout
     except Exception as e:
         return f"Error retrieving patch: {e}"
-
-
-if __name__ == "__main__":
-    # FastMCP's handles stdio by default.
-    mcp.run()

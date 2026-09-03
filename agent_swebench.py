@@ -1,5 +1,8 @@
 import json
 import argparse
+import subprocess
+import os
+import uuid
 from pathlib import Path
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -16,7 +19,6 @@ load_dotenv()
 
 def main():
     parser = argparse.ArgumentParser(description="Agent Smith SWE-bench Solver")
-
     parser.add_argument(
         "--task-file", required=True, help="Path to the dumped task JSON file"
     )
@@ -27,84 +29,96 @@ def main():
     parser.add_argument(
         "--provider-url", required=True, help="Base URL for the LLM API"
     )
-
     args = parser.parse_args()
 
-    # Load task data
     with open(args.task_file, "r", encoding="utf-8") as f:
         task_data = json.load(f)
     task = SWEBenchTaskInput(**task_data)
 
-    mcp_client = MCPClient()
+    container_name = f"swe_agent_{task.instance_id}_{uuid.uuid4().hex[:8]}"
+    print(f"[*] Starting Docker container: {container_name} using {task.docker_image}")
 
-    # Path to the mandatory SWE-bench MCP server
-    mcp_tools_path = Path(__file__).parent / "mcp_tools_swebench.py"
     try:
+        # Spin up the container and keep it alive in the background
+        subprocess.run(
+            [
+                "docker",
+                "run",
+                "-d",
+                "--name",
+                container_name,
+                task.docker_image,
+                "tail",
+                "-f",
+                "/dev/null",
+            ],
+            check=True,
+            capture_output=True,
+        )
+
+        # Pass the environment variables required by the tools
+        os.environ["SWE_CONTAINER_NAME"] = container_name
+        os.environ["TESTBED_PATH"] = (
+            f"/{task.repo}"  # Adjust if the image uses a specific mount point
+        )
+
+        mcp_client = MCPClient()
+        mcp_tools_path = Path(__file__).parent / "mcp_tools_swebench.py"
         mcp_client.connect_stdio(f"python {mcp_tools_path}")
-    except Exception as e:
-        print(f"Failed to connect to MCP server: {e}")
-        return
 
-    # Dictionary of callable functions for the Sandbox
-    mcp_tools_dict = {}
-    for tool in mcp_client.get_tools():
-        tool_name = tool["name"]
+        # Create Sandbox Tool Dictionary
+        mcp_tools_dict = {}
+        for tool in mcp_client.get_tools():
+            tool_name = tool["name"]
 
-        # Avoid Python's late-binding closure issue in loops
-        def make_tool_callable(name):
-            return lambda **kwargs: mcp_client.call_tool(name, kwargs)
+            def make_tool_callable(name):
+                return lambda **kwargs: mcp_client.call_tool(name, kwargs)
 
-        mcp_tools_dict[tool_name] = make_tool_callable(tool_name)
+            mcp_tools_dict[tool_name] = make_tool_callable(tool_name)
 
-    # Fetch the dynamically generated manual based on the server's tools
-    sandbox_manual = mcp_client.get_sandbox_manual()
-
-    config = SandboxConfig()
-    sandbox = Sandbox(config=config, mcp_tools=mcp_tools_dict)
-
-    try:
+        # Sandbox & Orchestrator Setup
+        sandbox_manual = mcp_client.get_sandbox_manual()
+        config = SandboxConfig()
+        sandbox = Sandbox(config=config, mcp_tools=mcp_tools_dict)
         token_manager = TokenManager()
-    except ValueError as e:
-        print(f"Startup Error: {e}")
-        return
 
-    # 5. Define SWE-bench specific prompts
-    system_prompt = (
-        "You are an autonomous coding agent. Your goal is to fix bugs in a codebase.\n"
-        "You write Python code to interact with the system. Your code is executed in a sandbox.\n\n"
-        f"SANDBOX MANUAL:\n{sandbox_manual}\n\n"
-        "To finish, you must call `final_answer(get_patch())` with the generated git patch."
-    )
+        system_prompt = (
+            "You are an autonomous coding agent. Your goal is to fix bugs in a codebase.\n"
+            "You write Python code to interact with the system. Your code is executed in a sandbox.\n\n"
+            f"SANDBOX MANUAL:\n{sandbox_manual}\n\n"
+            "To finish, you must call `final_answer(get_patch())` with the generated git patch."
+        )
 
-    task_prompt = (
-        f"Fix the following issue in the {task.repo} repository:\n\n"
-        f"Problem Statement:\n{task.problem_statement}\n\n"
-        f"Hints:\n{task.hints_text}\n\n"
-        "Explore the codebase, identify the bug, and use the get_patch() tool. "
-        "Then, submit the patch using final_answer(patch_string)."
-    )
+        task_prompt = (
+            f"Fix the following issue in the {task.repo} repository:\n\n"
+            f"Problem Statement:\n{task.problem_statement}\n\n"
+            f"Hints:\n{task.hints_text}\n\n"
+            "Explore the codebase, identify the bug, and use the get_patch() tool. "
+            "Then, submit the patch using final_answer(patch_string)."
+        )
 
-    orchestrator = AgentOrchestrator(
-        sandbox=sandbox, token_manager=token_manager, model_name=args.model_name
-    )
+        orchestrator = AgentOrchestrator(sandbox, token_manager, args.model_name)
+        solution_output = orchestrator.run(
+            task_id=task.instance_id,
+            benchmark="swebench",
+            system_prompt=system_prompt,
+            task_prompt=task_prompt,
+            max_iterations=30,
+        )
 
-    solution_output = orchestrator.run(
-        task_id=task.instance_id,
-        benchmark="swebench",
-        system_prompt=system_prompt,
-        task_prompt=task_prompt,
-        max_iterations=30,
-    )
+        # Output Dump
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write(solution_output.model_dump_json(indent=4))
+        print(f"[*] Solution saved to {output_path}")
 
-    output_path = Path(args.output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    with open(output_path, "w", encoding="utf-8") as f:
-        f.write(solution_output.model_dump_json(indent=4))
-
-    print(f"[*] Solution saved to {output_path}")
-
-    mcp_client.cleanup()
+    finally:
+        # Cleanup Guarantee
+        print(f"[*] Cleaning up Docker container: {container_name}")
+        subprocess.run(["docker", "rm", "-f", container_name], capture_output=True)
+        if "mcp_client" in locals():
+            mcp_client.cleanup()
 
 
 if __name__ == "__main__":

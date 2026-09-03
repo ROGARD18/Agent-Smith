@@ -1,160 +1,75 @@
 import os
-import re
 import subprocess
-from pathlib import Path
+import argparse
 from mcp.server.fastmcp import FastMCP
 
-# Initialize the FastMCP server
-mcp = FastMCP("SWE-bench-Tools")
+mcp = FastMCP("SWEBench-Tools")
 
-def get_testbed() -> Path:
-    """Retrieve the testbed path from the environment, defaulting to /testbed."""
-    testbed_path = os.environ.get("TESTBED_PATH", "/testbed")
-    return Path(testbed_path).resolve()
+def _run_shell(cmd: str) -> str:
+    """Helper to route commands locally or via Docker exec."""
+    testbed = os.environ.get("TESTBED_PATH", "/testbed")
+    container = os.environ.get("SWE_CONTAINER_NAME")
 
-def resolve_safe_path(filepath: str) -> Path:
-    """Ensure the path stays within the testbed to prevent path traversal."""
-    testbed = get_testbed()
-    safe_path = (testbed / filepath.lstrip("/")).resolve()
-    if not str(safe_path).startswith(str(testbed)):
-        raise PermissionError(f"Path traversal denied: {filepath}")
-    return safe_path
+    if container:
+        # Bridge into Docker
+        full_cmd = ["docker", "exec", "-w", testbed, container, "sh", "-c", cmd]
+    else:
+        # Run locally (used by moulinette tool isolation tests)
+        full_cmd = ["sh", "-c", f"cd {testbed} && {cmd}"]
 
-
-@mcp.tool()
-def read_file(filepath: str, start_line: int, end_line: int) -> str:
-    """Read the content of a file with line numbers."""
     try:
-        path = resolve_safe_path(filepath)
-        with open(path, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-        
-        output = []
-        start = max(1, start_line)
-        end = min(len(lines), end_line)
-        
-        for i in range(start, end + 1):
-            output.append(f"{i}: {lines[i-1].rstrip('\n')}")
-            
-        return "\n".join(output)
-    except Exception as e:
-        return f"Error reading file: {e}"
-
-@mcp.tool()
-def edit_file(filepath: str, old_str: str, new_str: str) -> str:
-    """Replace an exact string in a file with a new string."""
-    try:
-        path = resolve_safe_path(filepath)
-        with open(path, "r", encoding="utf-8") as f:
-            content = f.read()
-            
-        if old_str not in content:
-            return "Error: The exact old_str was not found in the file."
-            
-        new_content = content.replace(old_str, new_str)
-        
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(new_content)
-            
-        return f"Successfully updated {filepath}."
-    except Exception as e:
-        return f"Error editing file: {e}"
-
-@mcp.tool()
-def list_files(directory: str, pattern: str) -> str:
-    """List files in a directory matching a given pattern."""
-    try:
-        base_dir = resolve_safe_path(directory)
-        files = list(base_dir.rglob(pattern))
-        
-        if not files:
-            return "No files found."
-        return "\n".join(str(f.relative_to(get_testbed())) for f in files if f.is_file())
-    except Exception as e:
-        return f"Error listing files: {e}"
-
-@mcp.tool()
-def search_code(pattern: str, file_pattern: str) -> str:
-    """Perform a grep-like search in the codebase."""
-    try:
-        testbed = get_testbed()
-        files = list(testbed.rglob(file_pattern))
-        regex = re.compile(pattern)
-        results = []
-        
-        for f in files:
-            if f.is_file():
-                try:
-                    with open(f, "r", encoding="utf-8") as file_obj:
-                        for i, line in enumerate(file_obj, 1):
-                            if regex.search(line):
-                                # Output must be: /absolute/path_to_file.py:<line_number> <line_content>
-                                results.append(f"{f.absolute()}:{i} {line.rstrip('\n')}")
-                except UnicodeDecodeError:
-                    continue  # Skip binary files
-                    
-        return "\n".join(results) if results else "No matches found."
-    except Exception as e:
-        return f"Error searching code: {e}"
-
-@mcp.tool()
-def search_function_or_class_definition_in_code(name: str) -> str:
-    """Find the definition of a function or a class."""
-    # Matches `def my_func` or `class MyClass`
-    pattern = rf"^\s*(def|class)\s+{name}\b"
-    return search_code(pattern, "*.py")
-
-@mcp.tool()
-def find_references(name: str, filepath: str, line: int) -> str:
-    """Find all usages of a symbol (function or class)."""
-    # Matches the exact symbol name anywhere
-    pattern = rf"\b{name}\b"
-    return search_code(pattern, "*.py")
-
-
-@mcp.tool()
-def run_command(command: str, workdir: str) -> str:
-    """Execute a shell command in the specified working directory."""
-    try:
-        wd = resolve_safe_path(workdir)
-        result = subprocess.run(
-            command, shell=True, cwd=wd, capture_output=True, text=True
-        )
-        return (f"Exit Code: {result.returncode}\n"
-                f"STDOUT:\n{result.stdout}\n"
-                f"STDERR:\n{result.stderr}")
+        result = subprocess.run(full_cmd, capture_output=True, text=True, timeout=120)
+        output = result.stdout + result.stderr
+        return output if output else "Command executed successfully (no output)."
+    except subprocess.TimeoutExpired:
+        return "Error: Command timed out."
     except Exception as e:
         return f"Error executing command: {e}"
 
 @mcp.tool()
-def run_tests() -> str:
-    """Execute the evaluation script."""
-    try:
-        testbed = get_testbed()
-        # SWE-bench often places the eval script at the root, or passes it via the container setup
-        eval_script = testbed / "eval.sh"
-        cmd = "bash eval.sh" if eval_script.exists() else "pytest"
-            
-        result = subprocess.run(
-            cmd, shell=True, cwd=testbed, capture_output=True, text=True
-        )
-        return (f"Exit Code: {result.returncode}\n"
-                f"STDOUT:\n{result.stdout}\n"
-                f"STDERR:\n{result.stderr}")
-    except Exception as e:
-        return f"Error running tests: {e}"
+def run_command(command: str) -> str:
+    """Executes a generic shell command in the repository environment."""
+    return _run_shell(command)
+
+@mcp.tool()
+def read_file(filepath: str) -> str:
+    """
+    Reads a file and prints it with 1-indexed lines. 
+    Uses `cat -n` style as requested by the subject.
+    """
+    return _run_shell(f"cat -n {filepath}")
+
+@mcp.tool()
+def edit_file(filepath: str, start_line: int, end_line: int, replacement_text: str) -> str:
+    """
+    Replaces a specific block of lines in a file.
+    This bridge uses awk/sed logic or a Python script pushed to the container to handle the edit safely.
+    For simplicity, rewriting via a temporary patch or shell trick works.
+    """
+    # A robust way to edit files over a docker exec bridge without mounting:
+    # We write a quick Python edit script and execute it via the shell.
+    py_script = f"""
+import sys
+with open('{filepath}', 'r') as f: lines = f.readlines()
+lines[{start_line-1}:{end_line}] = [l + '\\n' for l in '''{replacement_text}'''.split('\\n')]
+with open('{filepath}', 'w') as f: f.writelines(lines)
+"""
+    # Escape single quotes for the shell wrap
+    escaped_script = py_script.replace("'", "'\\''")
+    return _run_shell(f"python3 -c '{escaped_script}'")
 
 @mcp.tool()
 def get_patch() -> str:
-    """Retrieve the unified git diff of all changes made to the repository."""
-    try:
-        testbed = get_testbed()
-        result = subprocess.run(
-            ["git", "-c", "core.fileMode=false", "diff"],
-            cwd=testbed, capture_output=True, text=True
-        )
-        if not result.stdout.strip():
-            return "No changes found."
-        return result.stdout
-    except Exception as e:
-        return f"Error retrieving patch: {e}"
+    """Generates the final solution patch."""
+    return _run_shell("git -c core.fileMode=false diff")
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="SWE-bench MCP Server")
+    parser.add_argument("--transport", choices=["stdio", "sse"], default="stdio")
+    parser.add_argument("--port", type=int, default=8000)
+    args = parser.parse_args()
+
+    if args.transport == "stdio":
+        mcp.run(transport="stdio")
+    elif args.transport == "sse":
+        mcp.run(transport="sse", port=args.port)

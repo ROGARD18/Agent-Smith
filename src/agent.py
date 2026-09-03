@@ -2,7 +2,7 @@ import time
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
-from sandbox import Sandbox
+from src.sandbox import Sandbox
 from src.llm import TokenManager, extract_python_code, generate_chat_response
 from src.models import StepMetrics, SolutionOutput
 

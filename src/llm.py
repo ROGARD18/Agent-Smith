@@ -48,8 +48,10 @@ def generate_chat_response(
             json={
                 "model": model,
                 "messages": messages
-            }
+            },
+            timeout=30
         )
+        
         
         request_time_ms = (time.perf_counter() - start_time) * 1000
         
@@ -60,6 +62,8 @@ def generate_chat_response(
             time.sleep(2)  # Brief backoff before hitting the new key
             continue
             
+        if response.status_code != 200:
+            print(f"\n[!] API Error Details: {response.text}\n")
         response.raise_for_status()
         
         data = response.json()

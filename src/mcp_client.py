@@ -16,12 +16,13 @@ class MCPClient:
         self._loop = asyncio.new_event_loop()
         self._tools_cache: List[Dict] = []
 
-    def connect_stdio(self, command: str):
+    def connect_stdio(self, command: str, env: dict = None):
         """Connects to an MCP server running as a local subprocess."""
         cmd_parts = command.split()
         server_params = StdioServerParameters(
             command=cmd_parts[0], 
-            args=cmd_parts[1:]
+            args=cmd_parts[1:],
+            env=env
         )
         self._loop.run_until_complete(self._init_stdio(server_params))
         self._loop.run_until_complete(self._fetch_tools())
@@ -88,5 +89,9 @@ class MCPClient:
 
     def cleanup(self):
         """Closes connections and cleans up the event loop."""
-        self._loop.run_until_complete(self._exit_stack.aclose())
-        self._loop.close()
+        try:
+            if not self._loop.is_closed():
+                self._loop.run_until_complete(self._exit_stack.aclose())
+                self._loop.close()
+        except Exception:
+            pass

@@ -58,13 +58,16 @@ def main():
 
         # Pass the environment variables required by the tools
         os.environ["SWE_CONTAINER_NAME"] = container_name
-        os.environ["TESTBED_PATH"] = (
-            f"/{task.repo}"  # Adjust if the image uses a specific mount point
-        )
+        repo_name = task.instance_id.split('__')[0]
+        os.environ["TESTBED_PATH"] = f"/{repo_name}"
+
+        server_env = os.environ.copy()
+        server_env["SWE_CONTAINER_NAME"] = container_name
+        server_env["TESTBED_PATH"] = "/testbed" 
 
         mcp_client = MCPClient()
         mcp_tools_path = Path(__file__).parent / "mcp_tools_swebench.py"
-        mcp_client.connect_stdio(f"python {mcp_tools_path}")
+        mcp_client.connect_stdio(f"python {mcp_tools_path}", env=server_env)
 
         # Create Sandbox Tool Dictionary
         mcp_tools_dict = {}
@@ -90,9 +93,8 @@ def main():
         )
 
         task_prompt = (
-            f"Fix the following issue in the {task.repo} repository:\n\n"
+            f"Fix the following issue for instance {task.instance_id}:\n\n"
             f"Problem Statement:\n{task.problem_statement}\n\n"
-            f"Hints:\n{task.hints_text}\n\n"
             "Explore the codebase, identify the bug, and use the get_patch() tool. "
             "Then, submit the patch using final_answer(patch_string)."
         )

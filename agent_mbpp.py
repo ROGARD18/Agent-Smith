@@ -57,12 +57,15 @@ def main():
     orchestrator = AgentOrchestrator(sandbox, token_manager, args.model_name)
     
     solution_output = orchestrator.run(
-        task_id=str(task.task_id),
-        benchmark="mbpp",
-        system_prompt=system_prompt,
-        task_prompt=task_prompt,
-        max_iterations=10
-    )
+                task_id=task.instance_id,
+                benchmark="swebench",
+                system_prompt=system_prompt,
+                task_prompt=task_prompt,
+                max_iterations=10,
+                max_input_tokens=6000,
+                max_output_tokens=1500,
+                max_time_seconds=120
+            )
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)

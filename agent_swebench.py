@@ -70,15 +70,26 @@ def main():
         mcp_client.connect_stdio(f"python {mcp_tools_path}", env=server_env)
 
         # Create Sandbox Tool Dictionary
+        # 3. Create Sandbox Tool Dictionary
         mcp_tools_dict = {}
         for tool in mcp_client.get_tools():
             tool_name = tool["name"]
-
-            def make_tool_callable(name):
-                return lambda **kwargs: mcp_client.call_tool(name, kwargs)
-
-            mcp_tools_dict[tool_name] = make_tool_callable(tool_name)
-
+            properties = tool.get("inputSchema", {}).get("properties", {})
+            
+            def make_tool_callable(name, props):
+                def wrapper(*args, **kwargs):
+                    call_args = {}
+                    prop_keys = list(props.keys())
+                    # Auto-map any positional arguments to their correct keyword names
+                    for i, arg in enumerate(args):
+                        if i < len(prop_keys):
+                            call_args[prop_keys[i]] = arg
+                    # Merge with any explicit keyword arguments
+                    call_args.update(kwargs)
+                    return mcp_client.call_tool(name, call_args)
+                return wrapper
+                
+            mcp_tools_dict[tool_name] = make_tool_callable(tool_name, properties)
         # Sandbox & Orchestrator Setup
         sandbox_manual = mcp_client.get_sandbox_manual()
         config = SandboxConfig()
@@ -89,7 +100,12 @@ def main():
             "You are an autonomous coding agent. Your goal is to fix bugs in a codebase.\n"
             "You write Python code to interact with the system. Your code is executed in a sandbox.\n\n"
             f"SANDBOX MANUAL:\n{sandbox_manual}\n\n"
-            "To finish, you must call `final_answer(get_patch())` with the generated git patch."
+            "CRITICAL INSTRUCTIONS:\n"
+            "1. You MUST call the tools above as standard Python functions inside a ```python block.\n"
+            "2. You MUST wrap your tool calls in a print() statement to see their output! (e.g., `print(run_command('ls -la'))`).\n"
+            "3. DO NOT output JSON tool calls. DO NOT import os or subprocess.\n"
+            "4. STRICT LIMIT: You only have 30 iterations. Do NOT over-verify. Once your manual reproduction script confirms the fix, stop testing.\n"
+            "5. The MOMENT you confirm the fix works, you MUST call `final_answer(get_patch())` to submit."
         )
 
         task_prompt = (
@@ -106,6 +122,9 @@ def main():
             system_prompt=system_prompt,
             task_prompt=task_prompt,
             max_iterations=30,
+            max_input_tokens=300000,
+            max_output_tokens=10000,
+            max_time_seconds=900
         )
 
         # Output Dump

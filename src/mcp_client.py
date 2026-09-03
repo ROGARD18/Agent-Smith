@@ -66,11 +66,17 @@ class MCPClient:
         if not self._tools_cache:
             return "No external tools available."
             
-        manual = "AVAILABLE TOOLS:\n"
+        manual = "AVAILABLE PYTHON FUNCTIONS:\n"
         for tool in self._tools_cache:
-            manual += f"- {tool['name']}: {tool['description']}\n"
-            schema_str = json.dumps(tool['inputSchema']['properties'])
-            manual += f"  Arguments: {schema_str}\n\n"
+            name = tool['name']
+            desc = tool['description']
+            
+            props = tool.get('inputSchema', {}).get('properties', {})
+            args_str = ", ".join([f"{k}: {v.get('type', 'any')}" for k, v in props.items()])
+            
+            manual += f"- {name}({args_str})\n"
+            manual += f"  Description: {desc}\n\n"
+            
         return manual
 
     def call_tool(self, name: str, arguments: Dict[str, Any]) -> str:

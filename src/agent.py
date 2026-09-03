@@ -20,13 +20,15 @@ class AgentOrchestrator:
         benchmark: str, 
         system_prompt: str, 
         task_prompt: str, 
-        max_iterations: int
+        max_iterations: int = 30,
+        max_input_tokens: int = 300000,
+        max_output_tokens: int = 10000,
+        max_time_seconds: int = 880
     ) -> SolutionOutput:
         """Executes the autonomous Thought -> Code -> Observation loop."""
         
         start_time = time.time()
         
-        # Initialize conversation history
         history = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": task_prompt}
@@ -43,7 +45,11 @@ class AgentOrchestrator:
         for iteration in range(1, max_iterations + 1):
             print(f"\n--- Iteration {iteration}/{max_iterations} ---")
             
-            # Call the LLM
+            if time.time() - start_time > max_time_seconds:
+                error_msg = f"Failed: Timeout exceeded ({max_time_seconds}s)."
+                print(f"[!] {error_msg}")
+                break
+            
             try:
                 llm_response = generate_chat_response(
                     messages=history,
@@ -108,16 +114,28 @@ class AgentOrchestrator:
             )
             steps.append(step_metric)
 
-            # Check Termination Conditions
             if success:
+                break
+                
+            current_total_input = sum(s.input_tokens for s in steps)
+            current_total_output = sum(s.output_tokens for s in steps)
+            
+            if current_total_input > max_input_tokens:
+                error_msg = f"Failed: Max input tokens exceeded ({max_input_tokens})."
+                print(f"[!] {error_msg}")
+                break
+                
+            if current_total_output > max_output_tokens:
+                error_msg = f"Failed: Max output tokens exceeded ({max_output_tokens})."
+                print(f"[!] {error_msg}")
                 break
                 
             # Feed the observation back to the LLM for the next thought cycle
             history.append({"role": "user", "content": f"Observation:\n{observation}"})
 
-        # Check if we hit the iteration limit without solving it
         if not success and not error_msg:
-            error_msg = f"Failed to solve task within {max_iterations} iterations."
+            error_msg = f"Failed: Max iterations reached ({max_iterations})."
+            print(f"[!] {error_msg}")
 
         # Compile total metrics
         total_time = time.time() - start_time

@@ -36,8 +36,7 @@ def generate_chat_response(
     max_retries: int = 5
 ) -> Dict[str, Any]:
     """Sends a full chat history to the LLM API with token rotation, retries, and metric tracking."""
-    api_url = "https://openrouter.ai/api/v1"
-    
+    api_url = "https://generativelanguage.googleapis.com/v1beta/openai"    
     for attempt in range(max_retries):
         api_key = token_manager.get_current_key()
         start_time = time.perf_counter()
@@ -49,7 +48,7 @@ def generate_chat_response(
                 "model": model,
                 "messages": messages
             },
-            timeout=30
+            timeout=120
         )
         
         

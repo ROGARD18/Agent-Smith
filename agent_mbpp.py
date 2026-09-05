@@ -47,22 +47,23 @@ def main():
     )
 
     tests_str = "\n".join(task.test_list)
+    imports_str = "\n".join(task.test_imports)
     
     task_prompt = (
-        f"Problem Statement:\n{task.text}\n\n"
-        f"Your function must pass the following tests:\n```python\n{task.test_setup_code}\n{tests_str}\n```\n\n"
+        f"Problem Statement:\n{task.task_definition}\n\n"
+        f"Your function must pass the following tests:\n```python\n{imports_str}\n{tests_str}\n```\n\n"
         "Write the code, test it with the asserts, and submit the final function as a string via final_answer()."
     )
 
     orchestrator = AgentOrchestrator(sandbox, token_manager, args.model_name)
     
     solution_output = orchestrator.run(
-                task_id=task.instance_id,
-                benchmark="swebench",
+                task_id=str(task.task_id),
+                benchmark="mbpp",
                 system_prompt=system_prompt,
                 task_prompt=task_prompt,
                 max_iterations=10,
-                max_input_tokens=6000,
+                max_input_tokens=60000,
                 max_output_tokens=1500,
                 max_time_seconds=120
             )

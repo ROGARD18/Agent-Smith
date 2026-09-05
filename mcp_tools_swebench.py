@@ -46,8 +46,6 @@ def edit_file(filepath: str, start_line: int, end_line: int, replacement_text: s
     This bridge uses awk/sed logic or a Python script pushed to the container to handle the edit safely.
     For simplicity, rewriting via a temporary patch or shell trick works.
     """
-    # A robust way to edit files over a docker exec bridge without mounting:
-    # We write a quick Python edit script and execute it via the shell.
     py_script = f"""
 import sys
 with open('{filepath}', 'r') as f: lines = f.readlines()

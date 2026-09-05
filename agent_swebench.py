@@ -99,17 +99,29 @@ def main():
         system_prompt = (
             "You are an autonomous software engineer. Your goal is to fix a bug in the provided codebase.\n"
             "You write Python code to interact with the system. Your code is executed in a sandbox.\n\n"
-            f"SANDBOX MANUAL:\n{sandbox_manual}\n\n"
+            "AVAILABLE TOOLS:\n"
+            "- run_command(command: str): Runs a shell command. Returns stdout, stderr, and exit code.\n"
+            "- read_file(filepath: str, start_line: int, end_line: int): Reads a specific line range from a file. Output includes line numbers.\n"
+            "- edit_file(filepath: str, old_str: str, new_str: str): Replaces an exact block of text. `old_str` MUST match the file exactly, including all indentation and spaces. Copy it from `read_file` output (without the line numbers).\n"
+            "- list_files(directory: str, pattern: str): Lists files matching a glob pattern (e.g., '*.py').\n"
+            "- search_code(pattern: str, file_pattern: str = '*'): Searches for a regex pattern in files.\n"
+            "- search_function_or_class_definition_in_code(name: str): Finds where a function/class is defined.\n"
+            "- find_references(name: str, filepath: str, line: int): Finds where a symbol is used.\n"
+            "- run_tests(): Runs the task's evaluation script to check if the issue is fixed.\n"
+            "- get_patch(): Generates the git diff of your changes.\n\n"
             "METHODOLOGY (Follow Strictly):\n"
-            "1. REPRODUCE: Write a minimal standalone Python script to reproduce the issue. Do NOT run full test suites.\n"
-            "2. LOCATE: Use shell commands (grep, find) to locate the relevant files and functions.\n"
-            "3. ANALYZE: Read the code to understand the root cause.\n"
-            "4. PATCH: Use `edit_file` to apply your fix.\n"
-            "5. VERIFY: Run your reproduction script again to ensure the bug is resolved.\n\n"
+            "1. REPRODUCE: Run a minimal standalone reproduction script or use `run_tests()` to see the failing tests.\n"
+            "2. LOCATE: Use the search tools to find the relevant files, classes, and functions.\n"
+            "3. ANALYZE: Use `read_file` to read the specific line ranges surrounding the bug.\n"
+            "4. PATCH: Use `edit_file` to apply your fix. Be extremely careful with `old_str` indentation.\n"
+            "5. VERIFY: Run your reproduction script or `run_tests()` again to ensure the bug is resolved.\n\n"
             "CRITICAL INSTRUCTIONS:\n"
             "1. You MUST call the tools above as standard Python functions inside a ```python block.\n"
-            "2. You MUST wrap your tool calls in a print() statement to see their output.\n"
-            "3. The MOMENT your verification script passes, immediately call `final_answer(get_patch())`."
+            "2. You MUST wrap your tool calls in a print() statement to see their output! (e.g., `print(run_tests())`).\n"
+            "3. DO NOT output JSON tool calls. DO NOT import os or subprocess.\n"
+            "4. ONE STEP AT A TIME: You MUST output exactly ONE ```python block per response. Stop writing immediately after your code block and wait for the system to return the execution results. Do NOT hallucinate or guess the output.\n"
+            "5. STRICT LIMIT: Stop testing once you confirm the fix works.\n"
+            "6. The MOMENT your verification passes, immediately call `final_answer(get_patch())` to submit."
         )
 
         task_prompt = (
@@ -125,7 +137,7 @@ def main():
             benchmark="swebench",
             system_prompt=system_prompt,
             task_prompt=task_prompt,
-            max_iterations=30,
+            max_iterations=130,
             max_input_tokens=300000,
             max_output_tokens=10000,
             max_time_seconds=900

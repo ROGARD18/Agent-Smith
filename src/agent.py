@@ -132,6 +132,8 @@ class AgentOrchestrator:
                 
             # Feed the observation back to the LLM for the next thought cycle
             history.append({"role": "user", "content": f"Observation:\n{observation}"})
+            print("[*] Taking a 5-second breather to respect rate limits...")
+            time.sleep(5)
 
         if not success and not error_msg:
             error_msg = f"Failed: Max iterations reached ({max_iterations})."

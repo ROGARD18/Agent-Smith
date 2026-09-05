@@ -56,7 +56,7 @@ def generate_chat_response(
             
             if response.status_code in [429, 402]:
                 # Rate limit or quota hit: rotate key and apply exponential backoff
-                sleep_time = 2 ** attempt
+                sleep_time = 20
                 print(f"Attempt {attempt + 1}: Rate limited (HTTP {response.status_code}). Rotating key and waiting {sleep_time}s...")
                 token_manager.rotate_key()
                 time.sleep(sleep_time)

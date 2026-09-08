@@ -1,10 +1,12 @@
 import json
 import argparse
+import os
 from pathlib import Path
 from dotenv import load_dotenv
 
 from src.sandbox import Sandbox, SandboxConfig
 from src.llm import TokenManager
+from src.mcp_client import MCPClient
 from src.agent import AgentOrchestrator
 from src.models import MBPPTaskInput
 
@@ -20,28 +22,49 @@ def main():
     
     args = parser.parse_args()
 
-    # Load task data
     with open(args.task_file, "r", encoding="utf-8") as f:
         task_data = json.load(f)
     task = MBPPTaskInput(**task_data)
 
-    mcp_tools = {} 
-    sandbox_manual = "You can write executable Python code to test your functions."
+    # Intégration du client MCP pour MBPP
+    mcp_client = MCPClient()
+    mcp_tools_path = Path(__file__).parent / "mcp_tools_mbpp.py"
+    server_env = os.environ.copy()
+    mcp_client.connect_stdio(f"python {mcp_tools_path}", env=server_env)
+
+    mcp_tools_dict = {}
+    for tool in mcp_client.get_tools():
+        tool_name = tool["name"]
+        properties = tool.get("inputSchema", {}).get("properties", {})
+        
+        def make_tool_callable(name, props):
+            def wrapper(*args, **kwargs):
+                call_args = {}
+                prop_keys = list(props.keys())
+                for i, arg in enumerate(args):
+                    if i < len(prop_keys):
+                        call_args[prop_keys[i]] = arg
+                call_args.update(kwargs)
+                return mcp_client.call_tool(name, call_args)
+            return wrapper
+            
+        mcp_tools_dict[tool_name] = make_tool_callable(tool_name, properties)
     
     config = SandboxConfig()
-    sandbox = Sandbox(config=config, mcp_tools=mcp_tools)
+    sandbox = Sandbox(config=config, mcp_tools=mcp_tools_dict)
     
     try:
-        token_manager = TokenManager()
+        token_manager = TokenManager(api_url=args.provider_url)
     except ValueError as e:
         print(f"Startup Error: {e}")
         return
 
-    # MBPP-specific prompts
+    sandbox_manual = mcp_client.get_sandbox_manual()
+
     system_prompt = (
         "You are an autonomous Python coding agent.\n"
         "Your goal is to write a Python function that solves the provided problem and passes all given tests.\n"
-        "You can test your code in the sandbox by writing Python code.\n"
+        f"{sandbox_manual}\n"
         "When you are confident your function is correct, you MUST submit the FULL function definition "
         "using `final_answer(solution_code_string)`. Ensure the submitted solution contains all necessary imports."
     )
@@ -52,7 +75,7 @@ def main():
     task_prompt = (
         f"Problem Statement:\n{task.task_definition}\n\n"
         f"Your function must pass the following tests:\n```python\n{imports_str}\n{tests_str}\n```\n\n"
-        "Write the code, test it with the asserts, and submit the final function as a string via final_answer()."
+        "Write the code, verify it with `run_tests(code, test_list)` and submit the final function as a string via final_answer()."
     )
 
     orchestrator = AgentOrchestrator(sandbox, token_manager, args.model_name)
@@ -63,9 +86,9 @@ def main():
                 system_prompt=system_prompt,
                 task_prompt=task_prompt,
                 max_iterations=10,
-                max_input_tokens=60000,
-                max_output_tokens=1500,
-                max_time_seconds=120
+                max_input_tokens=6000,  # Limite stricte MBPP corrigée
+                max_output_tokens=1500, # Limite stricte MBPP corrigée
+                max_time_seconds=100    # Marge de sécurité par rapport aux 120s
             )
 
     output_path = Path(args.output)
@@ -75,6 +98,7 @@ def main():
         f.write(solution_output.model_dump_json(indent=4))
         
     print(f"[*] MBPP Solution saved to {output_path}")
+    mcp_client.cleanup()
 
 if __name__ == "__main__":
     main()

@@ -11,7 +11,6 @@ class AgentOrchestrator:
         self.sandbox = sandbox
         self.token_manager = token_manager
         self.model_name = model_name
-        # Max length for tool output to prevent token explosion
         self.max_observation_length = 5000 
 
     def run(
@@ -25,7 +24,6 @@ class AgentOrchestrator:
         max_output_tokens: int = 10000,
         max_time_seconds: int = 880
     ) -> SolutionOutput:
-        """Executes the autonomous Thought -> Code -> Observation loop."""
         
         start_time = time.time()
         
@@ -49,74 +47,8 @@ class AgentOrchestrator:
                 error_msg = f"Failed: Timeout exceeded ({max_time_seconds}s)."
                 print(f"[!] {error_msg}")
                 break
-            
-            try:
-                llm_response = generate_chat_response(
-                    messages=history,
-                    token_manager=self.token_manager,
-                    model=self.model_name
-                )
-                total_requests += (llm_response["retries"] + 1)
-            except Exception as e:
-                error_msg = f"LLM API Error: {str(e)}"
-                break
 
-            raw_text = llm_response["content"]
-            history.append({"role": "assistant", "content": raw_text})
-
-            # Extract Code
-            code = extract_python_code(raw_text)
-            
-            if not code:
-                # Explicit feedback: No valid code block found
-                observation = (
-                    "Error: No valid tool call or Python code block found in your response. "
-                    "You must output executable Python code inside a ```python block, or use "
-                    "the authorized tool call format. Please try again."
-                )
-                sandbox_output = observation
-                code = ""
-            else:
-                # Execute Code in Sandbox
-                print("[*] Executing generated code...")
-                sandbox_result = self.sandbox.execute(code)
-                
-                if sandbox_result["status"] == "final_answer":
-                    success = True
-                    final_solution = sandbox_result["data"]
-                    sandbox_output = f"Task completed. Solution submitted: {final_solution}"
-                    observation = sandbox_output
-                elif sandbox_result["status"] == "error":
-                    # Explicit feedback: Syntax error or timeout
-                    sandbox_output = sandbox_result["data"]
-                    observation = f"Execution Error:\n{sandbox_output}\nPlease fix the error and try again."
-                else:
-                    # Standard observation
-                    sandbox_output = sandbox_result["data"]
-                    observation = sandbox_output
-                    
-                    # Explicit feedback: Tool output truncated
-                    if len(observation) > self.max_observation_length:
-                        observation = observation[:self.max_observation_length] + "\n... [Output Truncated]"
-
-            # Record Step Metrics
-            step_metric = StepMetrics(
-                step=iteration,
-                input_tokens=llm_response["input_tokens"],
-                output_tokens=llm_response["output_tokens"],
-                request_time_ms=llm_response["request_time_ms"],
-                api_url=llm_response["api_url"],
-                model_name=self.model_name,
-                llm_output=raw_text,
-                sandbox_input=code,
-                sandbox_output=sandbox_output,
-                retries=llm_response["retries"]
-            )
-            steps.append(step_metric)
-
-            if success:
-                break
-                
+            # CORRIGÉ : Vérification des limites AVANT d'effectuer la requête LLM
             current_total_input = sum(s.input_tokens for s in steps)
             current_total_output = sum(s.output_tokens for s in steps)
             
@@ -129,17 +61,86 @@ class AgentOrchestrator:
                 error_msg = f"Failed: Max output tokens exceeded ({max_output_tokens})."
                 print(f"[!] {error_msg}")
                 break
+            
+            # CORRIGÉ : Tronquer l'historique pour éviter la croissance exponentielle (O(n²))
+            if len(history) > 8:
+                history = history[:2] + history[-6:]
+            
+            try:
+                llm_response = generate_chat_response(
+                    messages=history,
+                    token_manager=self.token_manager,
+                    model=self.model_name,
+                    max_retries=20
+                )
+                total_requests += (llm_response["retries"] + 1)
+            except Exception as e:
+                error_msg = f"LLM API Error: {str(e)}"
+                break
+
+            raw_text = llm_response.get("content") or ""
+            
+            # CORRIGÉ : Détection stricte des réponses vides (reasoning tokens) pour ne pas casser la boucle
+            if not raw_text.strip():
+                observation = "Error: LLM returned an empty response. Ensure code blocks are correctly formatted."
+                history.append({"role": "user", "content": f"Observation:\n{observation}"})
+                continue
+
+            history.append({"role": "assistant", "content": raw_text})
+
+            code = extract_python_code(raw_text)
+            
+            if not code:
+                observation = (
+                    "Error: No valid tool call or Python code block found in your response. "
+                    "You must output executable Python code inside a ```python block, or use "
+                    "the authorized tool call format. Please try again."
+                )
+                sandbox_output = observation
+                code = ""
+            else:
+                print("[*] Executing generated code...")
+                sandbox_result = self.sandbox.execute(code)
                 
-            # Feed the observation back to the LLM for the next thought cycle
+                if sandbox_result["status"] == "final_answer":
+                    success = True
+                    final_solution = sandbox_result["data"]
+                    sandbox_output = f"Task completed. Solution submitted: {final_solution}"
+                    observation = sandbox_output
+                elif sandbox_result["status"] == "error":
+                    sandbox_output = sandbox_result["data"]
+                    observation = f"Execution Error:\n{sandbox_output}\nPlease fix the error and try again."
+                else:
+                    sandbox_output = sandbox_result["data"]
+                    observation = sandbox_output
+                    
+                    if len(observation) > self.max_observation_length:
+                        observation = observation[:self.max_observation_length] + "\n... [Output Truncated]"
+
+            step_metric = StepMetrics(
+                step=iteration,
+                input_tokens=llm_response.get("input_tokens", 0),
+                output_tokens=llm_response.get("output_tokens", 0),
+                request_time_ms=llm_response.get("request_time_ms", 0),
+                api_url=llm_response.get("api_url", ""),
+                model_name=self.model_name,
+                llm_output=raw_text,
+                sandbox_input=code,
+                sandbox_output=sandbox_output,
+                retries=llm_response.get("retries", 0)
+            )
+            steps.append(step_metric)
+
+            if success:
+                break
+                
             history.append({"role": "user", "content": f"Observation:\n{observation}"})
-            print("[*] Taking a 5-second breather to respect rate limits...")
-            time.sleep(5)
+            # CORRIGÉ : Suppression du time.sleep(5) qui grillait le budget timeout bêtement
 
         if not success and not error_msg:
             error_msg = f"Failed: Max iterations reached ({max_iterations})."
             print(f"[!] {error_msg}")
 
-        # Compile total metrics
         total_time = time.time() - start_time
         total_in_tokens = sum(s.input_tokens for s in steps)
         total_out_tokens = sum(s.output_tokens for s in steps)

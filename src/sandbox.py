@@ -9,7 +9,6 @@ from typing import List, Dict, Callable, Any, Optional
 from pydantic import BaseModel, Field
 from contextlib import redirect_stderr, redirect_stdout
 
-
 class SandboxConfig(BaseModel):
     """Sandbox configuration for student solutions.
     Uses allowlist approach: only imports in authorized_imports are allowed.
@@ -29,9 +28,8 @@ class SandboxConfig(BaseModel):
     allowed_directories: List[str] = Field(default_factory=lambda: [
             "/testbed", "/tmp/agent"
             ])
-    max_execution_time_seconds: int = 1
+    max_execution_time_seconds: int = 30  # CORRIGÉ : Timeout étendu à 30s
     max_memory_mb: int = 512
-
 
 class Sandbox:
     def __init__(self, config: SandboxConfig, mcp_tools: Optional[Dict[str, Callable]] = None):
@@ -44,12 +42,11 @@ class Sandbox:
         """
         safe_builtins: Dict = builtins.__dict__.copy()
         
-        # Populate standard harmless builtins to prevent NameErrors
-        dangerous_builtins = {'eval', 'exec', 'compile', 'globals', 'locals', 'vars', 'input'}
+        # CORRIGÉ : Liste noire étendue pour éviter l'évasion par __subclasses__
+        dangerous_builtins = {'eval', 'exec', 'compile', 'globals', 'locals', 'vars', 'input', 'getattr', 'setattr', 'delattr', 'type', '__build_class__'}
         for name in dangerous_builtins:
             safe_builtins.pop(name, None)
 
-        # Secure Import Function
         original_import = builtins.__import__
 
         def safe_import(name, globals=None, locals=None, fromlist=(), level=0):
@@ -68,25 +65,17 @@ class Sandbox:
                 raise ImportError(f"Import denied: '{name}'.")
             return original_import(name, globals, locals, fromlist, level)
 
-        # Secure Open Function
         original_open = builtins.open
 
         def safe_open(file, mode="r", buffering=-1, encoding=None,
                       errors=None, newline=None, closefd=True, opener=None):
-            """
-            Use realpath to resolve symlinks and
-            relative traversals like '../'
-            Return:
-                PermissionError if the path is not in the allowed directorie
-            """
             abs_path = os.path.realpath(file)
             is_allowed = any(
                 abs_path.startswith(os.path.realpath(d))
                 for d in self.config.allowed_directories
             )
             if not is_allowed:
-                raise PermissionError("Access denied to the "
-                                      f"repertory : {file}")
+                raise PermissionError(f"Access denied to the repertory : {file}")
             return original_open(
                 file, mode, buffering, encoding, errors,
                 newline, closefd, opener
@@ -95,7 +84,6 @@ class Sandbox:
         safe_builtins["__import__"] = safe_import
         safe_builtins["open"] = safe_open
 
-        # Construct globals and inject MCP tools
         safe_globals = {"__builtins__": safe_builtins}
         safe_globals.update(self.mcp_tools)
 
@@ -104,17 +92,18 @@ class Sandbox:
     def _disable_network(self):
         """
         Overrides socket creation to block network access.
-        Guarantees the llm to rely on it's own reasoning.
-        Prevent fetching of malicious payloads.
         """
         def disabled_socket(*args, **kwargs):
             raise PermissionError("Network access is disabled in the sandbox.")
         socket.socket = disabled_socket
+        # CORRIGÉ : Blocage étendu des appels réseau
+        socket.create_connection = disabled_socket
+        socket.socketpair = disabled_socket
+        socket.getaddrinfo = disabled_socket
 
     def _worker(self, code_string: str, queue: multiprocessing.Queue):
         capture_output = io.StringIO()
         try:
-            # Apply memory and CPU limits
             mem_bytes = self.config.max_memory_mb * 1024 * 1024
             resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
             resource.setrlimit(
@@ -122,47 +111,36 @@ class Sandbox:
                 (self.config.max_execution_time_seconds, self.config.max_execution_time_seconds),
             )
 
-            # Apply Network constraints
             self._disable_network()
-
-            # Prepare environment
             safe_globals = self._get_safe_globals()
 
-            # Inject final_answer to signal loop termination
             def final_answer(solution) -> None:
-                # We put the dictionary in the queue and exit to stop execution
                 queue.put({"status": "final_answer", "data": solution})
                 sys.exit(0) 
 
             safe_globals['final_answer'] = final_answer
-
             capture_output = io.StringIO()
 
             with (redirect_stdout(capture_output),
                   redirect_stderr(capture_output)):
-                exec(code_string, safe_globals, {})
+                # CORRIGÉ : Un seul dict pour globals/locals (résout les problèmes de scope des fonctions)
+                exec(code_string, safe_globals)
 
-            # If execution reaches here, final_answer wasn't called. Return observation.
             observation = capture_output.getvalue()
             if not observation:
                 observation = "Code executed successfully without any output."
             queue.put({"status": "observation", "data": observation})
 
         except SystemExit:
-            # final_answer triggers this cleanly, ignore unless queue is empty
             if queue.empty():
                 queue.put({"status": "error", "data": "Process exited unexpectedly."})
-        except BaseException as e:
-            # Catch BaseException to catch SystemExit/KeyboardInterrupt if raised maliciously
+        # CORRIGÉ : Remplacement de BaseException par Exception pour laisser passer SIGTERM / KeyboardInterrupt
+        except Exception as e:
             obs = capture_output.getvalue()
             error_msg = f"{type(e).__name__}: {e}\nOutput before error:\n{obs}"
             queue.put({"status": "error", "data": error_msg})
 
     def execute(self, code_string: str) -> Dict[str, Any]:
-        """
-        Executes code and returns a dict with 'status' and 'data'.
-        Statuses: 'observation', 'final_answer', or 'error'.
-        """
         queue = multiprocessing.Queue()
         process = multiprocessing.Process(
             target=self._worker, args=(code_string, queue)
@@ -172,10 +150,10 @@ class Sandbox:
         process.join(self.config.max_execution_time_seconds + 1)
 
         if process.is_alive():
-            process.terminate() # Send SIGTERM
+            process.terminate()
             process.join(1)
             if process.is_alive():
-                process.kill() # Send SIGKILL if it refuses to die
+                process.kill()
             return {
                 "status": "error", 
                 "data": "TimeoutException - Max execution time reached."

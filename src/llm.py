@@ -8,9 +8,9 @@ from typing import Optional, Dict, Any, List
 
 class TokenManager:
     """Manages rotation of multiple API keys to bypass free-tier rate limits."""
-    def __init__(self, provider_prefix: str = "OPENROUTER_API_KEY"):
+    def __init__(self, api_url: str, provider_prefix: str = "OPENROUTER_API_KEY"):
+        self.api_url = api_url.rstrip('/') # Sécurise les URL avec slash final
         self.keys = []
-        # Automatically load any keys matching the prefix (e.g., OPENROUTER_API_KEY_1, _2, etc.)
         for key, value in os.environ.items():
             if key.startswith(provider_prefix) and value:
                 self.keys.append(value)
@@ -32,8 +32,101 @@ class TokenManager:
 def generate_chat_response(
     messages: List[Dict[str, str]],
     token_manager: TokenManager,
+    model: str,
+    max_retries: int = 20,
+    max_tokens: int = 1500, # CORRIGÉ 3.2 : Empêche le modèle de cracher 2000 tokens
+    stop_sequences: Optional[List[str]] = None
+) -> Dict[str, Any]:
+    """Sends a full chat history to the LLM API with token rotation, exponential backoff, and safe extraction."""
+    
+    # CORRIGÉ 3.2 : Arrête la génération avant que le LLM n'hallucine la sortie du terminal
+    if stop_sequences is None:
+        stop_sequences = ["Observation:"]
+
+    api_url = token_manager.api_url    
+    start_time = time.perf_counter()
+    retries_used = 0
+    
+    for attempt in range(max_retries):
+        api_key = token_manager.get_current_key()
+        
+        try:
+            response = requests.post(
+                url=f"{api_url}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                json={
+                    "model": model,
+                    "messages": messages,
+                    "max_tokens": max_tokens,
+                    "stop": stop_sequences
+                },
+                timeout=120
+            )
+            
+            # CORRIGÉ 3.3 : Séparation immédiate et fatale du 402
+            if response.status_code == 402:
+                raise Exception(
+                    f"HTTP 402 Payment Required. Ensure your model ends with ':free' "
+                    f"or your account has credits. Details: {response.text}"
+                )
+
+            if response.status_code == 429:
+                sleep_time = 2
+                print(f"Attempt {attempt + 1}: Rate limited (HTTP 429). Rotating key and waiting {sleep_time}s...")
+                token_manager.rotate_key()
+                time.sleep(sleep_time)
+                retries_used += 1
+                continue
+                
+            if response.status_code in [500, 502, 503, 504]:
+                sleep_time = min(2 ** attempt, 8)
+                print(f"[!] API Error {response.status_code}. Server unavailable. Retrying in {sleep_time}s...")
+                time.sleep(sleep_time)
+                retries_used += 1
+                continue
+                
+            if response.status_code != 200:
+                print(f"\n[!] API Error Details: {response.text}\n")
+                response.raise_for_status()
+            
+            data = response.json()
+            usage = data.get('usage', {})
+            
+            try:
+                message = data["choices"][0]["message"]
+            except (KeyError, IndexError) as e:
+                raise Exception(f"Unexpected API response structure: {data}") from e
+            
+            raw_text = message.get("content") or ""
+            if not raw_text and "tool_calls" in message:
+                raw_text = str(message["tool_calls"])
+                
+            request_time_ms = (time.perf_counter() - start_time) * 1000
+            
+            return {
+                "content": raw_text,
+                "input_tokens": usage.get('prompt_tokens', 0),
+                "output_tokens": usage.get('completion_tokens', 0),
+                "request_time_ms": request_time_ms,
+                "api_url": api_url,
+                "model_name": model,
+                "retries": retries_used
+            }
+            
+        except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError) as e:
+            sleep_time = min(2 ** attempt, 8)
+            print(f"[!] Network error: {e}. Retrying in {sleep_time}s...")
+            time.sleep(sleep_time)
+            retries_used += 1
+
+    raise Exception("Max retries exceeded across all available API keys or due to persistent network issues.")
+
+
+def generate_chat_response(
+    messages: List[Dict[str, str]],
+    token_manager: TokenManager,
     model: str = "gemini-3.5-flash",
-    max_retries: int = 5
+    max_retries: int = 20
 ) -> Dict[str, Any]:
     """Sends a full chat history to the LLM API with token rotation, exponential backoff, and safe extraction."""
     api_url = "https://openrouter.ai/api/v1"    
@@ -64,8 +157,8 @@ def generate_chat_response(
                 continue
                 
             if response.status_code in [500, 502, 503, 504]:
-                # Google Server outage/overload: apply exponential backoff
-                sleep_time = 2 ** attempt
+                # CORRIGÉ 2.3 : Plafond à 8 secondes max pour éviter le coma de 12 jours
+                sleep_time = min(2 ** attempt, 8)
                 print(f"[!] API Error {response.status_code}. Server unavailable. Retrying in {sleep_time}s...")
                 time.sleep(sleep_time)
                 retries_used += 1
@@ -101,13 +194,13 @@ def generate_chat_response(
             }
             
         except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError) as e:
-            sleep_time = 2 ** attempt
+            # CORRIGÉ 2.3 : Plafond à 8 secondes max pour les erreurs réseau pures
+            sleep_time = min(2 ** attempt, 8)
             print(f"[!] Network error: {e}. Retrying in {sleep_time}s...")
             time.sleep(sleep_time)
             retries_used += 1
 
     raise Exception("Max retries exceeded across all available API keys or due to persistent network issues.")
-
 
 def extract_python_code(llm_response: str) -> Optional[str]:
     """

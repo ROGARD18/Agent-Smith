@@ -8,15 +8,12 @@ import multiprocessing
 import queue
 import time
 import traceback
+import ast
 from typing import List, Dict, Callable, Any, Optional
 from pydantic import BaseModel, Field
 from contextlib import redirect_stderr, redirect_stdout
 
 class SandboxConfig(BaseModel):
-    """Sandbox configuration for student solutions.
-    Uses allowlist approach: only imports in authorized_imports are allowed.
-    Everything else is blocked by default.
-    """
     authorized_imports: List[str] = Field(default_factory=lambda: [
             "math", "math.*",
             "collections", "collections.*",
@@ -41,13 +38,11 @@ class Sandbox:
 
     @staticmethod
     def _get_safe_globals(config: SandboxConfig) -> Dict:
-        """
-        Remove dangerous builtins from the sandbox.
-        Passed 'config' explicitly to avoid pickling 'self'.
-        """
         safe_builtins: Dict = builtins.__dict__.copy()
         
-        dangerous_builtins = {'eval', 'exec', 'compile', 'globals', 'locals', 'vars', 'input', 'getattr', 'setattr', 'delattr', 'type', '__build_class__'}
+        # CORRIGÉ 2.2 : On restaure type, getattr, setattr, delattr et __build_class__ 
+        # pour ne pas casser la POO et le fonctionnement normal de Python.
+        dangerous_builtins = {'eval', 'exec', 'compile', 'globals', 'locals', 'vars', 'input'}
         for name in dangerous_builtins:
             safe_builtins.pop(name, None)
 
@@ -92,9 +87,6 @@ class Sandbox:
 
     @staticmethod
     def _disable_network():
-        """
-        Overrides socket creation to block network access.
-        """
         def disabled_socket(*args, **kwargs):
             raise PermissionError("Network access is disabled in the sandbox.")
         socket.socket = disabled_socket
@@ -106,7 +98,29 @@ class Sandbox:
     def _worker(config: SandboxConfig, tool_names: List[str], code_string: str, request_queue: multiprocessing.Queue, response_queue: multiprocessing.Queue):
         capture_output = io.StringIO()
         try:
-            # RLIMIT_CPU ne limite que le temps de calcul CPU du code Python
+            # --- CORRIGÉ 2.2 : VÉRIFICATION AST POUR BLOQUER L'ÉVASION ---
+            # Bloque l'accès aux attributs magiques permettant de remonter l'arbre d'exécution
+            class SecurityNodeVisitor(ast.NodeVisitor):
+                def visit_Attribute(self, node):
+                    if node.attr in ('__class__', '__subclasses__', '__bases__', '__mro__', '__globals__', '__builtins__'):
+                        raise PermissionError(f"Security: Access to restricted attribute '{node.attr}' is forbidden.")
+                    self.generic_visit(node)
+                def visit_Name(self, node):
+                    if node.id in ('__class__', '__subclasses__', '__bases__', '__mro__', '__globals__'):
+                        raise PermissionError(f"Security: Access to restricted identifier '{node.id}' is forbidden.")
+                    self.generic_visit(node)
+
+            try:
+                tree = ast.parse(code_string)
+                SecurityNodeVisitor().visit(tree)
+            except SyntaxError as e:
+                request_queue.put({"type": "finish", "result": {"status": "error", "data": f"SyntaxError: {e}"}})
+                return
+            except PermissionError as e:
+                request_queue.put({"type": "finish", "result": {"status": "error", "data": f"SecurityException: {e}"}})
+                return
+            # -------------------------------------------------------------
+
             mem_bytes = config.max_memory_mb * 1024 * 1024
             resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
             resource.setrlimit(
@@ -117,19 +131,15 @@ class Sandbox:
             Sandbox._disable_network()
             safe_globals = Sandbox._get_safe_globals(config)
 
-            # 1. CRÉATION DES BOUCHONS (STUBS) POUR LES OUTILS
-            # Utilise une liste de strings pour éviter de pickler les vraies fonctions (macOS Spawn Safe)
             for tool_name in tool_names:
                 def make_stub(name):
                     def stub(*args, **kwargs):
-                        # On demande au processus parent d'exécuter l'outil
                         request_queue.put({
                             "type": "tool_call",
                             "name": name,
                             "args": args,
                             "kwargs": kwargs
                         })
-                        # On bloque l'enfant en attendant la réponse du parent
                         response = response_queue.get()
                         if response["status"] == "error":
                             raise Exception(response["result"])
@@ -137,7 +147,6 @@ class Sandbox:
                     return stub
                 safe_globals[tool_name] = make_stub(tool_name)
 
-            # 2. GESTION DE FINAL_ANSWER
             def final_answer(solution) -> None:
                 request_queue.put({
                     "type": "finish", 
@@ -149,7 +158,6 @@ class Sandbox:
 
             with (redirect_stdout(capture_output),
                   redirect_stderr(capture_output)):
-                # Un seul dictionnaire garantit que les fonctions définies se "voient" (Fix MBPP)
                 exec(code_string, safe_globals)
 
             observation = capture_output.getvalue()
@@ -158,7 +166,7 @@ class Sandbox:
             request_queue.put({"type": "finish", "result": {"status": "observation", "data": observation}})
 
         except SystemExit:
-            pass  # Géré par final_answer
+            pass  
         except Exception as e:
             obs = capture_output.getvalue()
             error_msg = f"{type(e).__name__}: {e}\nOutput before error:\n{obs}"
@@ -168,37 +176,31 @@ class Sandbox:
         request_queue = multiprocessing.Queue()
         response_queue = multiprocessing.Queue()
         
-        # On passe à _worker uniquement des objets "picklables" (pas de 'self')
         process = multiprocessing.Process(
             target=Sandbox._worker, 
             args=(self.config, list(self.mcp_tools.keys()), code_string, request_queue, response_queue)
         )
         process.start()
 
-        # LE CHRONOMÈTRE INTELLIGENT DU PARENT
         time_budget = float(self.config.max_execution_time_seconds)
         start_time = time.time()
 
         while True:
             try:
-                # Le parent attend que le sandbox parle. Le timeout diminue à chaque passage.
                 msg = request_queue.get(timeout=max(0.1, time_budget))
 
                 if msg["type"] == "tool_call":
-                    # PAUSE DU CHRONO : on déduit le temps déjà consommé par le sandbox
                     elapsed = time.time() - start_time
                     time_budget -= elapsed
 
                     tool_name = msg["name"]
                     try:
-                        # Exécution de l'outil HORS du bac à sable (donc hors de la limite de temps de 30s)
                         tool_func = self.mcp_tools[tool_name]
                         result = tool_func(*msg["args"], **msg["kwargs"])
                         response_queue.put({"status": "success", "result": result})
                     except Exception as e:
                         response_queue.put({"status": "error", "result": str(e)})
                     
-                    # REPRISE DU CHRONO
                     start_time = time.time()
 
                 elif msg["type"] == "finish":
@@ -206,7 +208,6 @@ class Sandbox:
                     return msg["result"]
 
             except queue.Empty:
-                # Timeout atteint (le code Python généré est parti en boucle infinie)
                 if process.is_alive():
                     process.terminate()
                     process.join(1)

@@ -82,15 +82,13 @@ def main():
         sandbox = Sandbox(config=config, mcp_tools=mcp_tools_dict)
         
         try:
-            token_manager = TokenManager()
+            token_manager = TokenManager(api_url=args.provider_url)
         except ValueError as e:
             print(f"Startup Error: {e}")
             return
 
-        # CORRECTION 2 : Ajout vital de l'exemple de formatage (EXAMPLE FORMAT) 
-        # Si le LLM ne voit pas les backticks de fermeture dans le prompt, il ne les écrira jamais !
         system_prompt = (
-            "You are an autonomous software engineer. Your goal is to fix a bug in the provided codebase.\n\n"
+            "You are Agent Smith, an expert software engineer fixing a SWE-bench repository.\n\n"
             "AVAILABLE TOOLS:\n"
             f"{sandbox_manual}\n\n"
             "METHODOLOGY (Follow Strictly):\n"
@@ -99,14 +97,18 @@ def main():
             "3. ANALYZE: Use `read_file` to read the specific line ranges.\n"
             "4. PATCH: Use `edit_file` to apply your fix. Be extremely careful with indentation.\n"
             "5. VERIFY: Run `run_tests()` again to ensure the bug is resolved.\n\n"
-            "CRITICAL INSTRUCTIONS:\n"
-            "1. You MUST call the tools above inside a ```python block.\n"
-            "2. You MUST wrap your tool calls in a print() statement.\n"
-            "3. ONE STEP AT A TIME: Output exactly ONE ```python block per response.\n"
-            "4. The MOMENT your verification passes, call `final_answer(get_patch())`.\n\n"
+            "CRITICAL RULES:\n"
+            "- Work through Thought -> Code -> Observation.\n"
+            "- Keep your 'Thought' phase extremely concise (1 to 3 sentences max).\n"
+            "- You MUST output exactly ONE ```python block per response.\n"
+            "- Wrap your tool calls in a print() statement.\n"
+            "- `run_tests()` may output massive git diffs. Ignore the noise. If the bottom of the log says 'tests passed' or 'OK', IMMEDIATELY call `final_answer(get_patch())`.\n"
+            "- The MOMENT your verification passes, call `final_answer(get_patch())`.\n\n"
+            "- NEVER write standalone Python code (e.g. `import sympy`). ONLY call the provided tools.\n"
             "EXAMPLE FORMAT:\n"
+            "Thought: I need to find where the diophantine function is defined to understand why permute=True fails.\n"
             "```python\n"
-            "print(run_tests())\n"
+            "print(search_function_or_class_definition_in_code('diophantine'))\n"
             "```\n"
         )
 

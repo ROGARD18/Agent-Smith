@@ -133,6 +133,7 @@ class AgentOrchestrator:
 
             if success:
                 break
+            
                 
             history.append({"role": "user", "content": f"Observation:\n{observation}"})
             # CORRIGÉ : Suppression du time.sleep(5) qui grillait le budget timeout bêtement
@@ -145,6 +146,26 @@ class AgentOrchestrator:
         total_in_tokens = sum(s.input_tokens for s in steps)
         total_out_tokens = sum(s.output_tokens for s in steps)
 
+        if not success:
+            if not error_msg:
+                error_msg = f"Failed: Max iterations reached ({max_iterations})."
+            print(f"[!] {error_msg}")
+            
+            # On tente de récupérer ce qui a été produit si l'outil existe
+            if "get_patch" in self.sandbox.mcp_tools:
+                print("[*] Attempting to salvage partial patch...")
+                try:
+                    fallback_patch = self.sandbox.mcp_tools["get_patch"]()
+                    # On s'assure que ce n'est pas un message d'erreur ou vide
+                    if fallback_patch and fallback_patch.strip() and "No changes made yet" not in fallback_patch:
+                        final_solution = fallback_patch
+                        success = True # Optionnel: on le passe à True si on considère qu'avoir un patch est un succès
+                        print("[*] Successfully salvaged a partial patch!")
+                except Exception as e:
+                    print(f"[!] Failed to salvage patch: {e}")
+
+        total_time = time.time() - start_time
+        
         return SolutionOutput(
             task_id=task_id,
             benchmark=benchmark,

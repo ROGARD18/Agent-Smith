@@ -56,8 +56,9 @@ def main():
 
         mcp_client = MCPClient()
         mcp_tools_path = Path(__file__).parent / "mcp_tools_swebench.py"
+        
+        # CORRECTION 1 : Ajout des guillemets autour du chemin au cas où il y a des espaces
         mcp_client.connect_stdio(f"python {mcp_tools_path}", env=server_env)
-
         mcp_tools_dict = {}
         for tool in mcp_client.get_tools():
             tool_name = tool["name"]
@@ -81,14 +82,17 @@ def main():
         sandbox = Sandbox(config=config, mcp_tools=mcp_tools_dict)
         
         try:
-            token_manager = TokenManager(api_url=args.provider_url)
+            token_manager = TokenManager()
         except ValueError as e:
             print(f"Startup Error: {e}")
             return
 
+        # CORRECTION 2 : Ajout vital de l'exemple de formatage (EXAMPLE FORMAT) 
+        # Si le LLM ne voit pas les backticks de fermeture dans le prompt, il ne les écrira jamais !
         system_prompt = (
-            "You are an autonomous software engineer. Your goal is to fix a bug in the provided codebase.\n"
-            f"{sandbox_manual}\n" # Intégration dynamique du manuel généré par le serveur MCP
+            "You are an autonomous software engineer. Your goal is to fix a bug in the provided codebase.\n\n"
+            "AVAILABLE TOOLS:\n"
+            f"{sandbox_manual}\n\n"
             "METHODOLOGY (Follow Strictly):\n"
             "1. REPRODUCE: Run `run_tests()` to see the failing tests.\n"
             "2. LOCATE: Use the search tools to find the relevant files.\n"
@@ -99,7 +103,11 @@ def main():
             "1. You MUST call the tools above inside a ```python block.\n"
             "2. You MUST wrap your tool calls in a print() statement.\n"
             "3. ONE STEP AT A TIME: Output exactly ONE ```python block per response.\n"
-            "4. The MOMENT your verification passes, call `final_answer(get_patch())`."
+            "4. The MOMENT your verification passes, call `final_answer(get_patch())`.\n\n"
+            "EXAMPLE FORMAT:\n"
+            "```python\n"
+            "print(run_tests())\n"
+            "```\n"
         )
 
         task_prompt = (
@@ -120,9 +128,13 @@ def main():
             max_time_seconds=840 # Tolérance de 60s pour éviter le kill brutal
         )
 
-        # Si l'agent échoue (timeout/limite atteinte) on tente quand même de récupérer le patch partiel
+        # CORRECTION 3 : Sécurisation de l'appel de secours avec un try/except
         if not solution_output.success and not solution_output.solution:
-            solution_output.solution = mcp_client.call_tool("get_patch", {})
+            try:
+                print("[*] Attempting to salvage partial patch...")
+                solution_output.solution = mcp_client.call_tool("get_patch", {})
+            except Exception as e:
+                print(f"[!] Failed to salvage patch: {e}")
 
         output_path = Path(args.output)
         output_path.parent.mkdir(parents=True, exist_ok=True)

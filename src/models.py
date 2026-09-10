@@ -22,7 +22,8 @@ class StepMetrics(BaseModel):
     timestamp: str = Field(default_factory=lambda: datetime.now().isoformat(
     ), description="ISO 8601 timestamp of when this step was recorded")
     api_url: str = Field(
-        default="", description="Base URL of the LLM API endpoint (e.g., 'https://openrouter.ai/api/v1')")
+        default="", description="Base URL of the LLM API endpoint "
+        "(e.g., 'https://openrouter.ai/api/v1')")
     model_name: str = Field(
         default="", description="Model identifier used for this step "
         "(e.g., 'qwen/qwen3-235b-a22b-2507')")
@@ -50,7 +51,7 @@ class SolutionOutput(BaseModel):
         ..., description="Task identifier (MBPP task_id as string, "
         "or SWE-bench instance_id)")
     benchmark: str = Field(...,
-                           description="Benchmark type: 'mbpp' or ' swebench'")
+                           description="Benchmark type: 'mbpp' or 'swebench'")
     success: bool = Field(...,
                           description="Whether the agent believes it solved"
                           " the task")
@@ -105,7 +106,12 @@ class SWEBenchTaskInput(BaseModel):
         "to be fixed")
     docker_image: str = Field(
         ..., description="Full Docker image name to pull (e.g., "
-        "'swebench/sweb.eval.x86_64. sympy_1776_sympy-23534:latest'")
+        "'swebench/sweb.eval.x86_64.sympy_1776_sympy-23534:latest')")
     eval_script: str = Field(
         ..., description="Bash script to run inside the "
         "container to evaluate the patch")
+    hints_text: str = Field(
+        default="", description="Optional hints about the issue "
+        "(may be empty)")
+    repo: str = Field(
+        default="", description="Repository name (e.g., 'sympy/sympy')")

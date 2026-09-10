@@ -34,12 +34,11 @@ def generate_chat_response(
     token_manager: TokenManager,
     model: str,
     max_retries: int = 20,
-    max_tokens: int = 1500, # CORRIGÉ 3.2 : Empêche le modèle de cracher 2000 tokens
+    max_tokens: int = 1500,
     stop_sequences: Optional[List[str]] = None
 ) -> Dict[str, Any]:
     """Sends a full chat history to the LLM API with token rotation, exponential backoff, and safe extraction."""
     
-    # CORRIGÉ 3.2 : Arrête la génération avant que le LLM n'hallucine la sortie du terminal
     if stop_sequences is None:
         stop_sequences = ["Observation:"]
 
@@ -63,7 +62,6 @@ def generate_chat_response(
                 timeout=120
             )
             
-            # CORRIGÉ 3.3 : Séparation immédiate et fatale du 402
             if response.status_code == 402:
                 raise Exception(
                     f"HTTP 402 Payment Required. Ensure your model ends with ':free' "
@@ -129,7 +127,7 @@ def generate_chat_response(
     max_retries: int = 20
 ) -> Dict[str, Any]:
     """Sends a full chat history to the LLM API with token rotation, exponential backoff, and safe extraction."""
-    api_url = "https://openrouter.ai/api/v1"    
+    api_url = "https://generativelanguage.googleapis.com/v1beta/openai"    
     start_time = time.perf_counter()
     retries_used = 0
     
@@ -147,9 +145,9 @@ def generate_chat_response(
                 timeout=120
             )
             
-            if response.status_code in [429, 402]:
+            if response.status_code in [429]:
                 # Rate limit or quota hit: rotate key and apply exponential backoff
-                sleep_time = 2
+                sleep_time = 60
                 print(f"Attempt {attempt + 1}: Rate limited (HTTP {response.status_code}). Rotating key and waiting {sleep_time}s...")
                 token_manager.rotate_key()
                 time.sleep(sleep_time)

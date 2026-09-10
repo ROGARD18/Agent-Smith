@@ -32,7 +32,24 @@ def main():
     container_name = f"swe_agent_{task.instance_id}_{uuid.uuid4().hex[:8]}"
     print(f"[*] Starting Docker container: {container_name} using {task.docker_image}")
 
-    # Gestion propre du SIGTERM pour garantir le nettoyage
+    # ==========================================
+    # CORRECTION : AUTO-PULL INTELLIGENT
+    # ==========================================
+    print(f"[*] Checking image {task.docker_image} availability...")
+    try:
+        # 1. On inspecte l'image localement en mode silencieux
+        subprocess.run(["docker", "image", "inspect", task.docker_image], capture_output=True, check=True)
+        print("[*] Image already present locally. Skipping pull.")
+    except subprocess.CalledProcessError:
+        # 2. Si l'inspect échoue, l'image est absente, on force le pull
+        print(f"[*] Image not found locally. Pulling {task.docker_image} (this may take a minute)...")
+        try:
+            subprocess.run(["docker", "pull", task.docker_image], check=True)
+            print("[*] Pull complete!")
+        except subprocess.CalledProcessError as e:
+            print(f"[!] Warning: Failed to pull image. Error: {e}")
+    # ==========================================
+
     def signal_handler(sig, frame):
         print(f"\n[*] SIGTERM received. Cleaning up Docker container: {container_name}")
         subprocess.run(["docker", "rm", "-f", container_name], capture_output=True)
@@ -51,13 +68,11 @@ def main():
         server_env = os.environ.copy()
         server_env["SWE_CONTAINER_NAME"] = container_name
         server_env["TESTBED_PATH"] = "/testbed" 
-        # Crucial : Fournit le fichier de tâche pour que run_tests() charge le script d'évaluation
         server_env["SWEBENCH_TASK_FILE"] = str(Path(args.task_file).resolve())
 
         mcp_client = MCPClient()
         mcp_tools_path = Path(__file__).parent / "mcp_tools_swebench.py"
         
-        # CORRECTION 1 : Ajout des guillemets autour du chemin au cas où il y a des espaces
         mcp_client.connect_stdio(f"python {mcp_tools_path}", env=server_env)
         mcp_tools_dict = {}
         for tool in mcp_client.get_tools():
@@ -87,6 +102,7 @@ def main():
             print(f"Startup Error: {e}")
             return
 
+
         system_prompt = (
             "You are Agent Smith, an expert software engineer fixing a SWE-bench repository.\n\n"
             "AVAILABLE TOOLS:\n"
@@ -102,14 +118,9 @@ def main():
             "- Keep your 'Thought' phase extremely concise (1 to 3 sentences max).\n"
             "- You MUST output exactly ONE ```python block per response.\n"
             "- Wrap your tool calls in a print() statement.\n"
-            "- `run_tests()` may output massive git diffs. Ignore the noise. If the bottom of the log says 'tests passed' or 'OK', IMMEDIATELY call `final_answer(get_patch())`.\n"
-            "- The MOMENT your verification passes, call `final_answer(get_patch())`.\n\n"
             "- NEVER write standalone Python code (e.g. `import sympy`). ONLY call the provided tools.\n"
-            "EXAMPLE FORMAT:\n"
-            "Thought: I need to find where the diophantine function is defined to understand why permute=True fails.\n"
-            "```python\n"
-            "print(search_function_or_class_definition_in_code('diophantine'))\n"
-            "```\n"
+            "- The `run_tests()` log is truncated at the BEGINNING. The END of the log contains the actual test results. If you see 'tests finished' or 'OK' at the bottom, DO NOT run tests again. IMMEDIATELY call `final_answer(get_patch())`.\n"
+            "- The MOMENT your verification passes, call `final_answer(get_patch())`.\n\n"
         )
 
         task_prompt = (
@@ -130,7 +141,7 @@ def main():
             max_time_seconds=840 # Tolérance de 60s pour éviter le kill brutal
         )
 
-        # CORRECTION 3 : Sécurisation de l'appel de secours avec un try/except
+        # Sécurisation de l'appel de secours avec un try/except
         if not solution_output.success and not solution_output.solution:
             try:
                 print("[*] Attempting to salvage partial patch...")

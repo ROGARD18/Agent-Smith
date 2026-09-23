@@ -22,13 +22,12 @@ class MCPClient:
         self._tools_cache: List[Dict[str, Any]] = []
 
     def connect_stdio(self, command: str,
-                      env: Optional[Dict[str, str]] = None) -> None:
+                      env: Optional[Dict[str, str]] = None
+                      ) -> None:
         """Connects to an MCP server running as a local subprocess."""
         cmd_parts = command.split()
         server_params = StdioServerParameters(
-            command=cmd_parts[0],
-            args=cmd_parts[1:],
-            env=env
+            command=cmd_parts[0], args=cmd_parts[1:], env=env
         )
         self._loop.run_until_complete(self._init_stdio(server_params))
         self._loop.run_until_complete(self._fetch_tools())
@@ -45,8 +44,7 @@ class MCPClient:
         transport first, falling back to SSE if not supported.
         """
         try:
-            self._loop.run_until_complete(
-                self._init_streamable_http(url))
+            self._loop.run_until_complete(self._init_streamable_http(url))
             self._loop.run_until_complete(self._fetch_tools())
         except Exception:
             # Fallback to SSE transport
@@ -54,21 +52,21 @@ class MCPClient:
             self._loop.run_until_complete(self._init_http(url))
             self._loop.run_until_complete(self._fetch_tools())
 
-    async def _init_stdio(
-        self, server_params: StdioServerParameters
-    ) -> None:
+    async def _init_stdio(self, server_params: StdioServerParameters) -> None:
         transport = await self._exit_stack.enter_async_context(
-            stdio_client(server_params))
+            stdio_client(server_params)
+        )
         self.session = await self._exit_stack.enter_async_context(
-            ClientSession(transport[0], transport[1]))
+            ClientSession(transport[0], transport[1])
+        )
         assert self.session is not None
         await self.session.initialize()
 
     async def _init_http(self, url: str) -> None:
-        transport = await self._exit_stack.enter_async_context(
-            sse_client(url))
+        transport = await self._exit_stack.enter_async_context(sse_client(url))
         self.session = await self._exit_stack.enter_async_context(
-            ClientSession(transport[0], transport[1]))
+            ClientSession(transport[0], transport[1])
+        )
         assert self.session is not None
         await self.session.initialize()
 
@@ -76,10 +74,13 @@ class MCPClient:
         """Try streamable HTTP transport (mcp library >= 1.x)."""
         try:
             from mcp.client.streamable_http import streamablehttp_client
+
             transport = await self._exit_stack.enter_async_context(
-                streamablehttp_client(url))
+                streamablehttp_client(url)
+            )
             self.session = await self._exit_stack.enter_async_context(
-                ClientSession(transport[0], transport[1]))
+                ClientSession(transport[0], transport[1])
+            )
             assert self.session is not None
             await self.session.initialize()
         except ImportError:
@@ -96,7 +97,7 @@ class MCPClient:
             {
                 "name": tool.name,
                 "description": tool.description,
-                "inputSchema": tool.inputSchema
+                "inputSchema": tool.inputSchema,
             }
             for tool in response.tools
         ]
@@ -116,28 +117,30 @@ class MCPClient:
             return "No external tools available."
 
         manual = "AVAILABLE PYTHON FUNCTIONS:\n"
-        manual += ("Call these functions directly in your Python code. "
-                   "They are available in the sandbox namespace.\n\n")
+        manual += (
+            "Call these functions directly in your Python code. "
+            "They are available in the sandbox namespace.\n\n"
+        )
 
         for tool in self._tools_cache:
-            name = tool['name']
-            desc = tool.get('description', 'No description available')
-            schema = tool.get('inputSchema', {})
-            props = schema.get('properties', {})
-            required = set(schema.get('required', []))
+            name = tool["name"]
+            desc = tool.get("description", "No description available")
+            schema = tool.get("inputSchema", {})
+            props = schema.get("properties", {})
+            required = set(schema.get("required", []))
 
             # Build function signature with types
             params = []
             for param_name, param_info in props.items():
-                param_type = param_info.get('type', 'any')
+                param_type = param_info.get("type", "any")
                 is_required = param_name in required
-                default = param_info.get('default')
+                default = param_info.get("default")
 
                 if is_required or default is None:
                     params.append(f"{param_name}: {param_type}")
                 else:
-                    params.append(
-                        f"{param_name}: {param_type} = {repr(default)}")
+                    params.append(f"{param_name}: {param_type}"
+                                  f" = {repr(default)}")
 
             args_str = ", ".join(params)
 
@@ -146,7 +149,7 @@ class MCPClient:
 
             # Add parameter descriptions if available
             for param_name, param_info in props.items():
-                param_desc = param_info.get('description', '')
+                param_desc = param_info.get("description", "")
                 if param_desc:
                     manual += f"    {param_name}: {param_desc}\n"
 
@@ -181,10 +184,10 @@ class MCPClient:
                             call_args[prop_keys[i]] = arg
                     call_args.update(kwargs)
                     return self.call_tool(name, call_args)
+
                 return wrapper
 
-            tools_dict[tool_name] = make_tool_callable(
-                tool_name, properties)
+            tools_dict[tool_name] = make_tool_callable(tool_name, properties)
 
         return tools_dict
 
@@ -193,11 +196,13 @@ class MCPClient:
         if not self.session:
             raise RuntimeError("MCP session not initialized.")
         result = self._loop.run_until_complete(
-            self._call_tool_async(name, arguments))
+            self._call_tool_async(name, arguments)
+            )
         return str(result)
 
     async def _call_tool_async(self, name: str,
-                               arguments: Dict[str, Any]) -> str:
+                               arguments: Dict[str, Any]
+                               ) -> str:
         if not self.session:
             return "Error: MCP session not initialized."
         try:

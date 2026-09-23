@@ -17,13 +17,18 @@ COMMAND_TIMEOUT = 300
 EVAL_TIMEOUT = int(os.environ.get("SWEBENCH_EVAL_TIMEOUT", "400"))
 MAX_TEST_OUTPUT = 12000
 
+
 class Testbed:
     """The workspace the tools act on: the task's Docker container in the
     normal case, or a plain local directory in TESTBED_PATH mode."""
 
     def __init__(self):
         # Support both the reference environment variable and your original one
-        self.container_name = os.environ.get("SWEBENCH_CONTAINER") or os.environ.get("SWE_CONTAINER_NAME") or None
+        self.container_name = (
+            os.environ.get("SWEBENCH_CONTAINER")
+            or os.environ.get("SWE_CONTAINER_NAME")
+            or None
+        )
         self.owned = self.container_name is None
         self.image = os.environ.get("SWEBENCH_IMAGE", "")
         self.local_path = os.environ.get("TESTBED_PATH", "")
@@ -51,27 +56,56 @@ class Testbed:
         if not self.image:
             raise RuntimeError(
                 "No SWE-bench testbed configured. Set SWEBENCH_TASK_FILE, "
-                "SWEBENCH_IMAGE, SWE_CONTAINER_NAME, or TESTBED_PATH.")
+                "SWEBENCH_IMAGE, SWE_CONTAINER_NAME, or TESTBED_PATH."
+            )
         name = "agent_smith_swe_" + uuid.uuid4().hex[:12]
         subprocess.run(
-            ["docker", "run", "-d", "--name", name, self.image,
-             "tail", "-f", "/dev/null"],
-            check=True, capture_output=True, text=True)
+            [
+                "docker",
+                "run",
+                "-d",
+                "--name",
+                name,
+                self.image,
+                "tail",
+                "-f",
+                "/dev/null",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
         self.container_name = name
         self.owned = True
         subprocess.run(
-            ["docker", "exec", name, "git", "config", "--global",
-             "--add", "safe.directory", WORKDIR],
-            capture_output=True, text=True)
+            [
+                "docker",
+                "exec",
+                name,
+                "git",
+                "config",
+                "--global",
+                "--add",
+                "safe.directory",
+                WORKDIR,
+            ],
+            capture_output=True,
+            text=True,
+        )
         return name
 
     def cleanup(self) -> None:
         if self.container_name and self.owned:
-            subprocess.run(["docker", "rm", "-f", self.container_name],
-                           capture_output=True, text=True)
+            subprocess.run(
+                ["docker", "rm", "-f", self.container_name],
+                capture_output=True,
+                text=True,
+            )
             self.container_name = None
 
+
 TESTBED = Testbed()
+
 
 def _exec(args, input_text=None, workdir=None, timeout=EXEC_TIMEOUT):
     """Run a command in the container. Returns (exit_code, stdout, stderr)."""
@@ -80,14 +114,22 @@ def _exec(args, input_text=None, workdir=None, timeout=EXEC_TIMEOUT):
         args = [a.replace(WORKDIR, local_root) for a in args]
         cwd = (workdir or WORKDIR).replace(WORKDIR, local_root)
         try:
-            proc = subprocess.run(args, input=input_text, cwd=cwd,
-                                  capture_output=True, text=True,
-                                  errors="replace", timeout=timeout)
+            proc = subprocess.run(
+                args,
+                input=input_text,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=timeout,
+            )
         except subprocess.TimeoutExpired:
             return 124, "", "Timed out after %ds." % timeout
-        return (proc.returncode,
-                proc.stdout.replace(local_root, WORKDIR),
-                proc.stderr.replace(local_root, WORKDIR))
+        return (
+            proc.returncode,
+            proc.stdout.replace(local_root, WORKDIR),
+            proc.stderr.replace(local_root, WORKDIR),
+        )
 
     container = TESTBED.ensure_container()
     cmd = ["docker", "exec"]
@@ -98,11 +140,18 @@ def _exec(args, input_text=None, workdir=None, timeout=EXEC_TIMEOUT):
     cmd.append(container)
     cmd += args
     try:
-        proc = subprocess.run(cmd, input=input_text, capture_output=True,
-                              text=True, errors="replace", timeout=timeout)
+        proc = subprocess.run(
+            cmd,
+            input=input_text,
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=timeout,
+        )
     except subprocess.TimeoutExpired:
         return 124, "", "Timed out after %ds inside the container." % timeout
     return proc.returncode, proc.stdout, proc.stderr
+
 
 def _format_grep(out: str) -> str:
     """Turn grep's 'path:line:content' into 'path:line content'."""
@@ -115,6 +164,7 @@ def _format_grep(out: str) -> str:
             lines.append(line)
     return "\n".join(lines)
 
+
 @mcp.tool()
 def read_file(filepath: str, start_line: int, end_line: int) -> str:
     """Read a file between two line numbers, one '<number>: <text>' each."""
@@ -125,14 +175,17 @@ def read_file(filepath: str, start_line: int, end_line: int) -> str:
     lines = out.splitlines()
     total = len(lines)
     if start_line > end_line:
-        return "Error: start_line (%d) > end_line (%d)." % (
-            start_line, end_line)
-    if (start_line < 1 or end_line < 1
-            or start_line > total or end_line > total):
+        return "Error: start_line (%d) > end_line (%d)." % (start_line, end_line)
+    if start_line < 1 or end_line < 1 or start_line > total or end_line > total:
         return "Error: lines %d-%d out of range (file has %d lines)." % (
-            start_line, end_line, total)
-    return "\n".join("%d: %s" % (i, lines[i - 1])
-                     for i in range(start_line, end_line + 1))
+            start_line,
+            end_line,
+            total,
+        )
+    return "\n".join(
+        "%d: %s" % (i, lines[i - 1]) for i in range(start_line, end_line + 1)
+    )
+
 
 @mcp.tool()
 def edit_file(filepath: str, old_str: str, new_str: str) -> str:
@@ -148,9 +201,11 @@ def edit_file(filepath: str, old_str: str, new_str: str) -> str:
         return "Error: cannot read '%s': %s" % (filepath, err.strip())
     count = out.count(old_str)
     if count == 0:
-        return ("Error: old_str not found in '%s'. Copy the lines exactly "
-                "from read_file (drop the 'N: ' prefix), keeping every "
-                "leading space." % filepath)
+        return (
+            "Error: old_str not found in '%s'. Copy the lines exactly "
+            "from read_file (drop the 'N: ' prefix), keeping every "
+            "leading space." % filepath
+        )
     new_content = out.replace(old_str, new_str)
 
     warning = ""
@@ -158,26 +213,32 @@ def edit_file(filepath: str, old_str: str, new_str: str) -> str:
         try:
             compile(new_content, filepath, "exec")
         except SyntaxError as e:
-            warning = (" WARNING: the file now has a syntax error "
-                       "(line %s: %s)." % (e.lineno, e.msg))
+            warning = " WARNING: the file now has a syntax error " "(line %s: %s)." % (
+                e.lineno,
+                e.msg,
+            )
 
-    rc, _, err = _exec(["sh", "-c", 'cat > "$1"', "_", filepath],
-                       input_text=new_content)
+    rc, _, err = _exec(
+        ["sh", "-c", 'cat > "$1"', "_", filepath], input_text=new_content
+    )
     if rc != 0:
         return "Error writing '%s': %s" % (filepath, err.strip())
-    return "Success: '%s' updated (%d replaced).%s" % (
-        filepath, count, warning)
+    return "Success: '%s' updated (%d replaced).%s" % (filepath, count, warning)
+
 
 @mcp.tool()
 def list_files(directory: str, pattern: str) -> str:
     """List files in a directory matching a glob pattern (e.g. '*.py')."""
     cmd = "find %s -name %s -type f 2>/dev/null | sort" % (
-        shlex.quote(directory), shlex.quote(pattern))
+        shlex.quote(directory),
+        shlex.quote(pattern),
+    )
     _, out, _ = _exec(["sh", "-c", cmd])
     files = [line for line in out.splitlines() if line.strip()]
     if not files:
         return "No files matching '%s' in '%s'." % (pattern, directory)
     return "\n".join(files)
+
 
 @mcp.tool()
 def search_code(pattern: str, file_pattern: str = "*") -> str:
@@ -185,44 +246,60 @@ def search_code(pattern: str, file_pattern: str = "*") -> str:
     cmd = "grep -rnI"
     if file_pattern and file_pattern != "*":
         cmd += " --include=%s" % shlex.quote(file_pattern)
-    cmd += " -e %s %s 2>/dev/null" % (
-        shlex.quote(pattern), shlex.quote(WORKDIR))
+    cmd += " -e %s %s 2>/dev/null" % (shlex.quote(pattern), shlex.quote(WORKDIR))
     _, out, _ = _exec(["sh", "-c", cmd])
     return _format_grep(out) or "No matches for '%s'." % pattern
+
 
 @mcp.tool()
 def search_function_or_class_definition_in_code(name: str) -> str:
     """Find where a function or class is defined (search_code format)."""
     ere = "^[[:space:]]*(def|class)[[:space:]]+" + re.escape(name) + "\\b"
     cmd = "grep -rnI -E --include=%s -e %s %s 2>/dev/null" % (
-        shlex.quote("*.py"), shlex.quote(ere), shlex.quote(WORKDIR))
+        shlex.quote("*.py"),
+        shlex.quote(ere),
+        shlex.quote(WORKDIR),
+    )
     _, out, _ = _exec(["sh", "-c", cmd])
     return _format_grep(out) or "Definition of '%s' not found." % name
+
 
 @mcp.tool()
 def find_references(name: str, filepath: str, line: int) -> str:
     """Find where a symbol is used across the repo (search_code format)."""
     cmd = "grep -rnwI --include=%s -e %s %s 2>/dev/null" % (
-        shlex.quote("*.py"), shlex.quote(name), shlex.quote(WORKDIR))
+        shlex.quote("*.py"),
+        shlex.quote(name),
+        shlex.quote(WORKDIR),
+    )
     _, out, _ = _exec(["sh", "-c", cmd])
     return _format_grep(out) or "No references found for '%s'." % name
+
 
 @mcp.tool()
 def run_command(command: str, workdir: str = WORKDIR) -> str:
     """Run a shell command in the container (stdout, stderr, exit code)."""
-    rc, out, err = _exec(["sh", "-c", command], workdir=workdir or WORKDIR,
-                         timeout=COMMAND_TIMEOUT)
+    rc, out, err = _exec(
+        ["sh", "-c", command], workdir=workdir or WORKDIR, timeout=COMMAND_TIMEOUT
+    )
     return "Exit Code: %d\n--- STDOUT ---\n%s\n--- STDERR ---\n%s" % (
-        rc, out or "(empty)", err or "(empty)")
+        rc,
+        out or "(empty)",
+        err or "(empty)",
+    )
+
 
 @mcp.tool()
 def run_tests() -> str:
     """Run the evaluation script and report which tests pass or fail."""
     if not TESTBED.eval_script:
-        return ("Error: no evaluation script configured (set "
-                "SWEBENCH_TASK_FILE). Use run_command to run tests manually.")
-    rc, _, err = _exec(["sh", "-c", "cat > /tmp/eval.sh"],
-                       input_text=TESTBED.eval_script)
+        return (
+            "Error: no evaluation script configured (set "
+            "SWEBENCH_TASK_FILE). Use run_command to run tests manually."
+        )
+    rc, _, err = _exec(
+        ["sh", "-c", "cat > /tmp/eval.sh"], input_text=TESTBED.eval_script
+    )
     if rc != 0:
         return "Error preparing eval script: %s" % err.strip()
     rc, out, err = _exec(["bash", "/tmp/eval.sh"], timeout=EVAL_TIMEOUT)
@@ -233,26 +310,29 @@ def run_tests() -> str:
     combined = "\n".join(parts)
     if len(combined) > MAX_TEST_OUTPUT:
         dropped = len(combined) - MAX_TEST_OUTPUT
-        combined = ("... [%d earlier characters truncated]\n" % dropped
-                    + combined[-MAX_TEST_OUTPUT:])
+        combined = (
+            "... [%d earlier characters truncated]\n" % dropped
+            + combined[-MAX_TEST_OUTPUT:]
+        )
     return combined
+
 
 @mcp.tool()
 def get_patch() -> str:
     """Return the git diff of every change made to the repo so far."""
-    rc, out, err = _exec(["git", "-c", "core.fileMode=false", "diff"],
-                         workdir=WORKDIR)
+    rc, out, err = _exec(["git", "-c", "core.fileMode=false", "diff"], workdir=WORKDIR)
     if rc != 0:
         return "Error generating patch: %s" % err.strip()
     return out if out.strip() else "No changes made yet (empty diff)."
+
 
 def _on_signal(signum, frame):
     TESTBED.cleanup()
     raise SystemExit(0)
 
+
 atexit.register(TESTBED.cleanup)
-for _sig in (getattr(signal, "SIGINT", None),
-             getattr(signal, "SIGTERM", None)):
+for _sig in (getattr(signal, "SIGINT", None), getattr(signal, "SIGTERM", None)):
     if _sig is not None:
         try:
             signal.signal(_sig, _on_signal)

@@ -15,9 +15,12 @@ class TokenManager:
     Keys are discovered from environment variables matching the given prefix.
     """
 
-    def __init__(self, api_url: str = "https://openrouter.ai/api/v1",
-                 provider_prefix: Optional[str] = None):
-        self.api_url = api_url.rstrip('/')
+    def __init__(
+        self,
+        api_url: str = "https://openrouter.ai/api/v1",
+        provider_prefix: Optional[str] = None,
+    ):
+        self.api_url = api_url.rstrip("/")
         self.keys: List[str] = []
 
         # Determine prefixes to search
@@ -30,8 +33,9 @@ class TokenManager:
             if "requesty" in url_lower:
                 prefixes.extend(["REQUESTY_API_KEY", "OPENROUTER_API_KEY"])
             elif "googleapis" in url_lower or "gemini" in url_lower:
-                prefixes.extend(["GEMINI_API_KEY", "GOOGLE_API_KEY",
-                                 "OPENROUTER_API_KEY"])
+                prefixes.extend(
+                    ["GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENROUTER_API_KEY"]
+                )
             elif "openai" in url_lower:
                 prefixes.extend(["OPENAI_API_KEY", "OPENROUTER_API_KEY"])
             else:
@@ -64,8 +68,10 @@ class TokenManager:
         self.provider_prefix = prefixes[0] if prefixes else "API_KEY"
 
         self.current_index = 0
-        print(f"[*] TokenManager: {len(self.keys)} key(s) loaded "
-              f"for {provider_prefix} at {self.api_url}")
+        print(
+            f"[*] TokenManager: {len(self.keys)} key(s) loaded "
+            f"for {provider_prefix} at {self.api_url}"
+        )
 
     def get_current_key(self) -> str:
         return self.keys[self.current_index]
@@ -82,7 +88,7 @@ def generate_chat_response(
     model: str,
     max_retries: int = 20,
     max_tokens: int = 1500,
-    stop_sequences: Optional[List[str]] = None
+    stop_sequences: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Sends a full chat history to the LLM API with token rotation,
     exponential backoff (capped), and safe extraction."""
@@ -105,9 +111,9 @@ def generate_chat_response(
                     "model": model,
                     "messages": messages,
                     "max_tokens": max_tokens,
-                    "stop": stop_sequences
+                    "stop": stop_sequences,
                 },
-                timeout=120
+                timeout=120,
             )
 
             # 402: Payment Required — do NOT retry, fail immediately
@@ -120,10 +126,11 @@ def generate_chat_response(
 
             # 429: Rate limited — rotate key and retry
             if response.status_code == 429:
-                sleep_time = min(2 ** attempt, 8)
+                sleep_time = min(2**attempt, 8)
                 print(
                     f"Attempt {attempt + 1}: Rate limited (HTTP 429). "
-                    f"Rotating key and waiting {sleep_time}s...")
+                    f"Rotating key and waiting {sleep_time}s..."
+                )
                 token_manager.rotate_key()
                 time.sleep(sleep_time)
                 retries_used += 1
@@ -131,10 +138,11 @@ def generate_chat_response(
 
             # 5xx: Server errors — retry with capped backoff
             if response.status_code in [500, 502, 503, 504]:
-                sleep_time = min(2 ** attempt, 8)
+                sleep_time = min(2**attempt, 8)
                 print(
                     f"[!] API Error {response.status_code}. Server "
-                    f"unavailable. Retrying in {sleep_time}s...")
+                    f"unavailable. Retrying in {sleep_time}s..."
+                )
                 time.sleep(sleep_time)
                 retries_used += 1
                 continue
@@ -151,18 +159,19 @@ def generate_chat_response(
                 if isinstance(error_msg, dict):
                     error_msg = error_msg.get("message", str(error_msg))
                 print(f"[!] API returned error in 200: {error_msg}")
-                sleep_time = min(2 ** attempt, 8)
+                sleep_time = min(2**attempt, 8)
                 time.sleep(sleep_time)
                 retries_used += 1
                 continue
 
-            usage = data.get('usage', {})
+            usage = data.get("usage", {})
 
             try:
                 message = data["choices"][0]["message"]
             except (KeyError, IndexError) as e:
                 raise Exception(
-                    f"Unexpected API response structure: {data}") from e
+                    f"Unexpected API response structure: {data}"
+                    ) from e
 
             raw_text = message.get("content") or ""
             if not raw_text and message.get("reasoning_content"):
@@ -170,28 +179,32 @@ def generate_chat_response(
             if not raw_text and "tool_calls" in message:
                 raw_text = str(message["tool_calls"])
 
-            request_time_ms = (time.perf_counter() - start_time) * 1000
+            request_time_ms =\
+                (time.perf_counter() - start_time) * 1000
 
             return {
                 "content": raw_text,
-                "input_tokens": usage.get('prompt_tokens', 0),
-                "output_tokens": usage.get('completion_tokens', 0),
+                "input_tokens": usage.get("prompt_tokens", 0),
+                "output_tokens": usage.get("completion_tokens", 0),
                 "request_time_ms": request_time_ms,
                 "api_url": api_url,
                 "model_name": model,
-                "retries": retries_used
+                "retries": retries_used,
             }
 
-        except (requests.exceptions.ReadTimeout,
-                requests.exceptions.ConnectionError) as e:
-            sleep_time = min(2 ** attempt, 8)
+        except (
+            requests.exceptions.ReadTimeout,
+            requests.exceptions.ConnectionError,
+        ) as e:
+            sleep_time = min(2**attempt, 8)
             print(f"[!] Network error: {e}. Retrying in {sleep_time}s...")
             time.sleep(sleep_time)
             retries_used += 1
 
     raise Exception(
         "Max retries exceeded across all available API keys "
-        "or due to persistent network issues.")
+        "or due to persistent network issues."
+    )
 
 
 def extract_python_code(llm_response: str) -> Optional[str]:
@@ -203,14 +216,16 @@ def extract_python_code(llm_response: str) -> Optional[str]:
         return None
 
     # 1. Primary Format: Standard Python markdown block (closed)
-    python_match = re.search(r"```python\s*(.*?)\s*```",
-                             llm_response, re.DOTALL | re.IGNORECASE)
+    python_match = re.search(
+        r"```python\s*(.*?)\s*```", llm_response, re.DOTALL | re.IGNORECASE
+    )
     if python_match:
         return python_match.group(1).strip()
 
     # 2. Fallback: Unclosed Python markdown block
     python_unclosed_match = re.search(
-        r"```python\s*(.*)", llm_response, re.DOTALL | re.IGNORECASE)
+        r"```python\s*(.*)", llm_response, re.DOTALL | re.IGNORECASE
+    )
     if python_unclosed_match:
         code = python_unclosed_match.group(1).strip()
         if code:
@@ -229,7 +244,8 @@ def extract_python_code(llm_response: str) -> Optional[str]:
     if '"Code"' in llm_response or '"code"' in llm_response:
         try:
             code_json_match = re.search(
-                r'"[Cc]ode"\s*:\s*"((?:[^"\\]|\\.)*)"', llm_response)
+                r'"[Cc]ode"\s*:\s*"((?:[^"\\]|\\.)*)"', llm_response
+            )
             if code_json_match:
                 extracted = json.loads(f'"{code_json_match.group(1)}"')
                 if extracted and extracted.strip():
@@ -238,8 +254,8 @@ def extract_python_code(llm_response: str) -> Optional[str]:
             pass
 
     # JSON / Hermes Format: <tool_call>{...}</tool_call>
-    json_match = re.search(
-        r"<tool_call>(.*?)</tool_call>", llm_response, re.DOTALL)
+    json_match = re.search(r"<tool_call>(.*?)</tool_call>",
+                           llm_response, re.DOTALL)
     if json_match:
         try:
             tool_data = json.loads(json_match.group(1).strip())
@@ -253,7 +269,8 @@ def extract_python_code(llm_response: str) -> Optional[str]:
     # XML Format (Anthropic style): <invoke name="func">...</invoke>
     xml_match = re.search(
         r"<invoke\s+name=[\"'](.*?)[\"']>(.*?)</invoke>",
-        llm_response, re.DOTALL)
+        llm_response, re.DOTALL
+    )
     if xml_match:
         try:
             name = xml_match.group(1).strip()
@@ -261,8 +278,8 @@ def extract_python_code(llm_response: str) -> Optional[str]:
             root = ET.fromstring(f"<root>{params_raw}</root>")
 
             kwargs = []
-            for param in root.findall('parameter'):
-                p_name = param.get('name')
+            for param in root.findall("parameter"):
+                p_name = param.get("name")
                 p_value = param.text
                 if p_name and p_value is not None:
                     try:
@@ -290,18 +307,26 @@ def extract_python_code(llm_response: str) -> Optional[str]:
 
     # 4. EXTREME FALLBACK: Raw tool call without any markdown formatting
     tool_prefixes = (
-        'print(', 'run_tests(', 'run_command(', 'read_file(',
-        'edit_file(', 'list_files(', 'search_code(',
-        'search_function_or_class_definition_in_code(', 'find_references(',
-        'get_patch(', 'final_answer(', 'check_syntax(',
-        'result =', 'result=',
+        "print(",
+        "run_tests(",
+        "run_command(",
+        "read_file(",
+        "edit_file(",
+        "list_files(",
+        "search_code(",
+        "search_function_or_class_definition_in_code(",
+        "find_references(",
+        "get_patch(",
+        "final_answer(",
+        "check_syntax(",
+        "result =",
+        "result=",
     )
     if any(prefix in llm_response for prefix in tool_prefixes[:6]):
-        lines = llm_response.split('\n')
+        lines = llm_response.split("\n")
         code_lines = [
-            line for line in lines
-            if line.strip().startswith(tool_prefixes)
-        ]
+                      line for line in lines
+                      if line.strip().startswith(tool_prefixes)]
         if code_lines:
             return "\n".join(code_lines)
 

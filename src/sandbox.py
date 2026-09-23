@@ -1,39 +1,55 @@
-import json
-import os
-import time
-import socket
+import ast
 import builtins
 import io
-import sys
-import ast
-import resource
+import json
 import multiprocessing
-import queue
+import os
 from pathlib import Path
-from typing import List, Dict, Callable, Any, Optional, cast
+import queue
+import resource
+import socket
+import sys
+import time
+from typing import Any, Callable, Dict, List, Optional, cast
 
 from pydantic import BaseModel, Field
 
 
 class SandboxConfig(BaseModel):
     """Sandbox configuration for student solutions.
+
     Uses allowlist approach: only imports in authorized_imports are allowed.
     Everything else is blocked by default.
     """
-    authorized_imports: List[str] = Field(default_factory=lambda: [
-        "math", "math.*",
-        "collections", "collections.*",
-        "itertools", "re", "json",
-        "typing", "typing.*",
-        "functools", "operator",
-        "heapq", "bisect", "copy",
-        "string", "random",
-        "datetime", "datetime.*",
-        "array", "cmath", "time"
-    ])
-    allowed_directories: List[str] = Field(default_factory=lambda: [
-        "/testbed", "/tmp/agent"
-    ])
+
+    authorized_imports: List[str] = Field(
+        default_factory=lambda: [
+            "math",
+            "math.*",
+            "collections",
+            "collections.*",
+            "itertools",
+            "re",
+            "json",
+            "typing",
+            "typing.*",
+            "functools",
+            "operator",
+            "heapq",
+            "bisect",
+            "copy",
+            "string",
+            "random",
+            "datetime",
+            "datetime.*",
+            "array",
+            "cmath",
+            "time",
+        ]
+    )
+    allowed_directories: List[str] = Field(
+        default_factory=lambda: ["/testbed", "/tmp/agent"]
+    )
     max_execution_time_seconds: int = 30
     max_memory_mb: int = 512
 
@@ -46,13 +62,16 @@ class SandboxConfig(BaseModel):
 class Sandbox:
     """Secure sandbox for executing LLM-generated Python code.
 
-    Runs code in a separate process with restricted imports, filesystem access,
-    network disabled, and timeout/memory limits enforced. MCP tool wrappers
-    are injected as callable functions in the sandbox namespace.
+    Runs code in a separate process with restricted imports, filesystem
+    access, network disabled, and timeout/memory limits enforced. MCP tool
+    wrappers are injected as callable functions in the sandbox namespace.
     """
 
-    def __init__(self, config: SandboxConfig,
-                 mcp_tools: Optional[Dict[str, Callable[..., Any]]] = None):
+    def __init__(
+        self,
+        config: SandboxConfig,
+        mcp_tools: Optional[Dict[str, Callable[..., Any]]] = None,
+    ):
         self.config = config
         self.mcp_tools = mcp_tools or {}
 
@@ -65,10 +84,14 @@ class Sandbox:
         # Keep __build_class__ (needed for class definitions),
         # type (needed for type checks), getattr/setattr (legitimate use)
         dangerous_builtins = {
-            'eval', 'exec', 'compile',
-            'globals', 'locals', 'vars',
-            'input',
-            'breakpoint',
+            "eval",
+            "exec",
+            "compile",
+            "globals",
+            "locals",
+            "vars",
+            "input",
+            "breakpoint",
         }
         for name in dangerous_builtins:
             safe_builtins.pop(name, None)
@@ -76,15 +99,20 @@ class Sandbox:
         original_import = builtins.__import__
 
         def safe_import(
-            name: str, globals: Any = None, locals: Any = None,
-            fromlist: Any = (), level: int = 0
+            name: str,
+            globals: Any = None,
+            locals: Any = None,
+            fromlist: Any = (),
+            level: int = 0,
         ) -> Any:
             allowed = False
             for auth_import in config.authorized_imports:
                 if auth_import.endswith(".*"):
                     base_module = auth_import[:-2]
-                    if (name == base_module or
-                            name.startswith(base_module + ".")):
+                    if (
+                        name == base_module
+                        or name.startswith(base_module + ".")
+                    ):
                         allowed = True
                         break
                 elif name == auth_import:
@@ -97,10 +125,14 @@ class Sandbox:
         original_open = builtins.open
 
         def safe_open(
-            file: Any, mode: str = "r", buffering: int = -1,
-            encoding: Optional[str] = None, errors: Optional[str] = None,
-            newline: Optional[str] = None, closefd: bool = True,
-            opener: Any = None
+            file: Any,
+            mode: str = "r",
+            buffering: int = -1,
+            encoding: Optional[str] = None,
+            errors: Optional[str] = None,
+            newline: Optional[str] = None,
+            closefd: bool = True,
+            opener: Any = None,
         ) -> Any:
             abs_path = os.path.realpath(str(file))
             is_allowed = any(
@@ -109,9 +141,18 @@ class Sandbox:
             )
             if not is_allowed:
                 raise PermissionError(
-                    f"Access denied to the directory: {file}")
-            return original_open(file, mode, buffering, encoding,
-                                 errors, newline, closefd, opener)
+                    f"Access denied to the directory: {file}"
+                )
+            return original_open(
+                file,
+                mode,
+                buffering,
+                encoding,
+                errors,
+                newline,
+                closefd,
+                opener,
+            )
 
         safe_builtins["__import__"] = safe_import
         safe_builtins["open"] = safe_open
@@ -121,9 +162,12 @@ class Sandbox:
     @staticmethod
     def _disable_network() -> None:
         """Disable all network access by monkey-patching socket."""
+
         def disabled_socket(*args: Any, **kwargs: Any) -> Any:
             raise PermissionError(
-                "Network access is disabled in the sandbox.")
+                "Network access is disabled in the sandbox."
+            )
+
         socket.socket = disabled_socket  # type: ignore[misc, assignment]
         socket.create_connection = disabled_socket
         socket.socketpair = disabled_socket
@@ -143,61 +187,82 @@ class Sandbox:
             # AST-based security check before execution
             class SecurityNodeVisitor(ast.NodeVisitor):
                 """Block access to dangerous dunder attributes at AST level."""
+
                 BLOCKED_ATTRS = {
-                    '__class__', '__subclasses__', '__bases__', '__mro__',
-                    '__globals__', '__builtins__', '__code__', '__func__',
-                    '__self__', '__dict__', '__init_subclass__',
-                    '__set_name__', '__del__',
+                    "__class__",
+                    "__subclasses__",
+                    "__bases__",
+                    "__mro__",
+                    "__globals__",
+                    "__builtins__",
+                    "__code__",
+                    "__func__",
+                    "__self__",
+                    "__dict__",
+                    "__init_subclass__",
+                    "__set_name__",
+                    "__del__",
                 }
                 BLOCKED_NAMES = {
-                    '__class__', '__subclasses__', '__bases__', '__mro__',
-                    '__globals__', '__builtins__',
+                    "__class__",
+                    "__subclasses__",
+                    "__bases__",
+                    "__mro__",
+                    "__globals__",
+                    "__builtins__",
                 }
 
                 def visit_Attribute(self, node: ast.Attribute) -> None:
                     if node.attr in self.BLOCKED_ATTRS:
                         raise PermissionError(
                             f"Security: Access to restricted attribute "
-                            f"'{node.attr}' is forbidden.")
+                            f"'{node.attr}' is forbidden."
+                        )
                     self.generic_visit(node)
 
                 def visit_Name(self, node: ast.Name) -> None:
                     if node.id in self.BLOCKED_NAMES:
                         raise PermissionError(
                             f"Security: Access to restricted identifier "
-                            f"'{node.id}' is forbidden.")
+                            f"'{node.id}' is forbidden."
+                        )
                     self.generic_visit(node)
 
             try:
                 tree = ast.parse(code_string)
                 SecurityNodeVisitor().visit(tree)
             except SyntaxError as e:
-                request_queue.put({
-                    "type": "finish",
-                    "result": {
-                        "status": "error",
-                        "data": f"SyntaxError: {e}"
+                request_queue.put(
+                    {
+                        "type": "finish",
+                        "result": {
+                            "status": "error",
+                            "data": f"SyntaxError: {e}",
+                        },
                     }
-                })
+                )
                 return
             except PermissionError as e:
-                request_queue.put({
-                    "type": "finish",
-                    "result": {
-                        "status": "error",
-                        "data": f"SecurityException: {e}"
+                request_queue.put(
+                    {
+                        "type": "finish",
+                        "result": {
+                            "status": "error",
+                            "data": f"SecurityException: {e}",
+                        },
                     }
-                })
+                )
                 return
 
             # Set resource limits
             mem_bytes = config.max_memory_mb * 1024 * 1024
-            resource.setrlimit(resource.RLIMIT_AS,
-                               (mem_bytes, mem_bytes))
+            resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
             resource.setrlimit(
                 resource.RLIMIT_CPU,
-                (config.max_execution_time_seconds,
-                 config.max_execution_time_seconds),
+                (
+                    config.max_execution_time_seconds,
+                    config.max_execution_time_seconds,
+                ),
             )
 
             # Disable network and build safe globals
@@ -206,33 +271,37 @@ class Sandbox:
 
             # Inject MCP tool stubs that communicate back to main process
             for tool_name in tool_names:
+
                 def make_stub(name: str) -> Callable[..., Any]:
                     def stub(*args: Any, **kwargs: Any) -> Any:
-                        request_queue.put({
-                            "type": "tool_call",
-                            "name": name,
-                            "args": args,
-                            "kwargs": kwargs,
-                        })
+                        request_queue.put(
+                            {
+                                "type": "tool_call",
+                                "name": name,
+                                "args": args,
+                                "kwargs": kwargs,
+                            }
+                        )
                         response = response_queue.get()
                         if response["status"] == "error":
                             raise Exception(response["result"])
                         return response["result"]
+
                     return stub
+
                 safe_globals[tool_name] = make_stub(tool_name)
 
             # Inject final_answer
             def final_answer(solution: Any) -> None:
-                request_queue.put({
-                    "type": "finish",
-                    "result": {
-                        "status": "final_answer",
-                        "data": solution
-                    },
-                })
+                request_queue.put(
+                    {
+                        "type": "finish",
+                        "result": {"status": "final_answer", "data": solution},
+                    }
+                )
                 sys.exit(0)
 
-            safe_globals['final_answer'] = final_answer
+            safe_globals["final_answer"] = final_answer
 
             # Capture stdout/stderr
             old_stdout = sys.stdout
@@ -248,40 +317,39 @@ class Sandbox:
 
             observation = capture_output.getvalue()
             if not observation:
-                observation = (
-                    "Code executed successfully without any output.")
-            request_queue.put({
-                "type": "finish",
-                "result": {
-                    "status": "observation",
-                    "data": observation
+                observation = "Code executed successfully without any output."
+            request_queue.put(
+                {
+                    "type": "finish",
+                    "result": {"status": "observation", "data": observation},
                 }
-            })
+            )
 
         except SystemExit:
             # Allow SystemExit to propagate (used by final_answer)
             pass
         except KeyboardInterrupt:
             # Propagate KeyboardInterrupt
-            request_queue.put({
-                "type": "finish",
-                "result": {
-                    "status": "error",
-                    "data": "KeyboardInterrupt"
+            request_queue.put(
+                {
+                    "type": "finish",
+                    "result": {
+                        "status": "error",
+                        "data": "KeyboardInterrupt",
+                    },
                 }
-            })
+            )
         except Exception as e:
             obs = capture_output.getvalue()
             error_msg = f"{type(e).__name__}: {e}"
             if obs:
                 error_msg += f"\nOutput before error:\n{obs}"
-            request_queue.put({
-                "type": "finish",
-                "result": {
-                    "status": "error",
-                    "data": error_msg
+            request_queue.put(
+                {
+                    "type": "finish",
+                    "result": {"status": "error", "data": error_msg},
                 }
-            })
+            )
 
     def execute(self, code_string: str) -> Dict[str, Any]:
         """Execute code in a sandboxed subprocess.
@@ -295,8 +363,13 @@ class Sandbox:
 
         process = multiprocessing.Process(
             target=Sandbox._worker,
-            args=(self.config, list(self.mcp_tools.keys()),
-                  code_string, request_queue, response_queue),
+            args=(
+                self.config,
+                list(self.mcp_tools.keys()),
+                code_string,
+                request_queue,
+                response_queue,
+            ),
         )
         process.start()
 
@@ -316,15 +389,13 @@ class Sandbox:
                     try:
                         tool_func = self.mcp_tools[tool_name]
                         result = tool_func(*msg["args"], **msg["kwargs"])
-                        response_queue.put({
-                            "status": "success",
-                            "result": result
-                        })
+                        response_queue.put(
+                            {"status": "success", "result": result}
+                        )
                     except Exception as e:
-                        response_queue.put({
-                            "status": "error",
-                            "result": str(e)
-                        })
+                        response_queue.put(
+                            {"status": "error", "result": str(e)}
+                        )
 
                     start_time = time.time()
 

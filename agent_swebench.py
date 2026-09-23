@@ -18,16 +18,17 @@ load_dotenv()
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Agent Smith SWE-bench Solver")
-    parser.add_argument("--task-file", required=True,
-                        help="Path to the dumped task JSON file")
-    parser.add_argument("--output", required=True,
-                        help="Path to save the SolutionOutput JSON")
-    parser.add_argument("--model-name", required=True,
-                        help="LLM model identifier")
-    parser.add_argument("--provider-url", required=True,
-                        help="Base URL for the LLM API")
+    parser = argparse.ArgumentParser(description="Agent Smith SWE-bench Solver")
+    parser.add_argument(
+        "--task-file", required=True, help="Path to the dumped task JSON file"
+    )
+    parser.add_argument(
+        "--output", required=True, help="Path to save the SolutionOutput JSON"
+    )
+    parser.add_argument("--model-name", required=True, help="LLM model identifier")
+    parser.add_argument(
+        "--provider-url", required=True, help="Base URL for the LLM API"
+    )
     args = parser.parse_args()
 
     with open(args.task_file, "r", encoding="utf-8") as f:
@@ -35,21 +36,23 @@ def main():
     task = SWEBenchTaskInput(**task_data)
 
     container_name = f"swe_agent_{task.instance_id}_{uuid.uuid4().hex[:8]}"
-    print(f"[*] Starting Docker container: {container_name} "
-          f"using {task.docker_image}")
+    print(
+        f"[*] Starting Docker container: {container_name} " f"using {task.docker_image}"
+    )
 
     # Auto-pull Docker image if needed
     print(f"[*] Checking image {task.docker_image} availability...")
     try:
         subprocess.run(
             ["docker", "image", "inspect", task.docker_image],
-            capture_output=True, check=True)
+            capture_output=True,
+            check=True,
+        )
         print("[*] Image already present locally. Skipping pull.")
     except subprocess.CalledProcessError:
         print(f"[*] Image not found locally. Pulling {task.docker_image}...")
         try:
-            subprocess.run(
-                ["docker", "pull", task.docker_image], check=True)
+            subprocess.run(["docker", "pull", task.docker_image], check=True)
             print("[*] Pull complete!")
         except subprocess.CalledProcessError as e:
             print(f"[!] Warning: Failed to pull image. Error: {e}")
@@ -57,8 +60,7 @@ def main():
     # Signal handler for clean Docker container cleanup
     def signal_handler(sig, frame):
         print(f"\n[*] Signal {sig} received. Cleaning up: {container_name}")
-        subprocess.run(
-            ["docker", "rm", "-f", container_name], capture_output=True)
+        subprocess.run(["docker", "rm", "-f", container_name], capture_output=True)
         sys.exit(128 + sig)
 
     signal.signal(signal.SIGTERM, signal_handler)
@@ -66,8 +68,17 @@ def main():
 
     try:
         subprocess.run(
-            ["docker", "run", "-d", "--name", container_name,
-             task.docker_image, "tail", "-f", "/dev/null"],
+            [
+                "docker",
+                "run",
+                "-d",
+                "--name",
+                container_name,
+                task.docker_image,
+                "tail",
+                "-f",
+                "/dev/null",
+            ],
             check=True,
             capture_output=True,
         )
@@ -75,14 +86,12 @@ def main():
         server_env = os.environ.copy()
         server_env["SWE_CONTAINER_NAME"] = container_name
         server_env["TESTBED_PATH"] = "/testbed"
-        server_env["SWEBENCH_TASK_FILE"] = str(
-            Path(args.task_file).resolve())
+        server_env["SWEBENCH_TASK_FILE"] = str(Path(args.task_file).resolve())
 
         mcp_client = MCPClient()
         mcp_tools_path = Path(__file__).parent / "mcp_tools_swebench.py"
 
-        mcp_client.connect_stdio(
-            f"python {mcp_tools_path}", env=server_env)
+        mcp_client.connect_stdio(f"python {mcp_tools_path}", env=server_env)
 
         # Create tool callables for sandbox injection
         mcp_tools_dict = mcp_client.make_tool_callables()
@@ -99,10 +108,9 @@ def main():
 
         # Build hints section if available
         hints_section = ""
-        if hasattr(task, 'hints_text') and task.hints_text:
+        if hasattr(task, "hints_text") and task.hints_text:
             hints_section = (
-                f"\nHINTS (from the issue discussion):\n"
-                f"{task.hints_text}\n"
+                f"\nHINTS (from the issue discussion):\n" f"{task.hints_text}\n"
             )
 
         system_prompt = (
@@ -152,8 +160,7 @@ def main():
             "explore the codebase to understand and fix the bug."
         )
 
-        orchestrator = AgentOrchestrator(
-            sandbox, token_manager, args.model_name)
+        orchestrator = AgentOrchestrator(sandbox, token_manager, args.model_name)
         solution_output = orchestrator.run(
             task_id=task.instance_id,
             benchmark="swebench",
@@ -162,7 +169,7 @@ def main():
             max_iterations=30,
             max_input_tokens=300000,
             max_output_tokens=10000,
-            max_time_seconds=840
+            max_time_seconds=840,
         )
 
         # Salvage patch if agent didn't submit one
@@ -170,8 +177,7 @@ def main():
             try:
                 print("[*] Attempting to salvage partial patch...")
                 patch = mcp_client.call_tool("get_patch", {})
-                if (patch and patch.strip()
-                        and "No changes made yet" not in patch):
+                if patch and patch.strip() and "No changes made yet" not in patch:
                     solution_output.solution = patch
             except Exception as e:
                 print(f"[!] Failed to salvage patch: {e}")
@@ -184,8 +190,7 @@ def main():
 
     finally:
         print(f"[*] Cleaning up Docker container: {container_name}")
-        subprocess.run(
-            ["docker", "rm", "-f", container_name], capture_output=True)
+        subprocess.run(["docker", "rm", "-f", container_name], capture_output=True)
         if "mcp_client" in locals():
             mcp_client.cleanup()
 

@@ -16,14 +16,16 @@ load_dotenv()
 def main():
     parser = argparse.ArgumentParser(description="Agent Smith MBPP Solver")
 
-    parser.add_argument("--task-file", required=True,
-                        help="Path to the dumped task JSON file")
-    parser.add_argument("--output", required=True,
-                        help="Path to save the SolutionOutput JSON")
-    parser.add_argument("--model-name", required=True,
-                        help="LLM model identifier")
-    parser.add_argument("--provider-url", required=True,
-                        help="Base URL for the LLM API")
+    parser.add_argument(
+        "--task-file", required=True, help="Path to the dumped task JSON file"
+    )
+    parser.add_argument(
+        "--output", required=True, help="Path to save the SolutionOutput JSON"
+    )
+    parser.add_argument("--model-name", required=True, help="LLM model identifier")
+    parser.add_argument(
+        "--provider-url", required=True, help="Base URL for the LLM API"
+    )
 
     args = parser.parse_args()
 
@@ -62,7 +64,7 @@ def main():
         "2. Write your solution function\n"
         "3. Test it with run_tests(code, test_list)\n"
         "4. If tests pass, submit via final_answer(code_string)\n\n"
-        "RESPONSE FORMAT (follow EXACTLY every time):\nExample Response:\nThought: I will write the function and test it.\nCode:\n```python\nmy_code = \"def add(a, b): return a + b\"\nprint(run_tests(my_code, [\"assert add(1, 2) == 3\"]))\n```\n\n"
+        'RESPONSE FORMAT (follow EXACTLY every time):\nExample Response:\nThought: I will write the function and test it.\nCode:\n```python\nmy_code = "def add(a, b): return a + b"\nprint(run_tests(my_code, ["assert add(1, 2) == 3"]))\n```\n\n'
         "Thought: <brief reasoning about your approach>\n"
         "Code:\n"
         "```python\n"
@@ -119,7 +121,7 @@ def main():
         max_iterations=10,
         max_input_tokens=6000,
         max_output_tokens=1500,
-        max_time_seconds=100
+        max_time_seconds=100,
     )
 
     output_path = Path(args.output)

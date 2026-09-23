@@ -12,12 +12,12 @@ from src.mcp_client import MCPClient  # noqa: E402
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Interactive Sandbox REPL")
-    parser.add_argument("config_file", nargs="?",
-                        help="Path to sandbox config JSON file")
+    parser.add_argument(
+        "config_file", nargs="?", help="Path to sandbox config JSON file"
+    )
     parser.add_argument("--mcp-stdio",
                         help="Command to start MCP stdio server")
-    parser.add_argument("--mcp-server",
-                        help="URL of MCP HTTP server")
+    parser.add_argument("--mcp-server", help="URL of MCP HTTP server")
     args = parser.parse_args()
 
     config = SandboxConfig()
@@ -50,8 +50,10 @@ def main() -> None:
 
         try:
             mcp_tools = mcp_client.make_tool_callables()
-            print(f"[*] Loaded {len(mcp_tools)} MCP tool(s): "
-                  f"{', '.join(mcp_tools.keys())}")
+            print(
+                f"[*] Loaded {len(mcp_tools)} MCP tool(s): "
+                f"{', '.join(mcp_tools.keys())}"
+            )
         except Exception as e:
             print(f"Failed to fetch MCP tools: {e}")
 
@@ -87,12 +89,12 @@ def main() -> None:
                 pass
 
             result = sandbox.execute(source)
-            status = result.get('status')
-            data = result.get('data')
+            status = result.get("status")
+            data = result.get("data")
 
-            if status == 'error':
+            if status == "error":
                 print(f"Error: {data}")
-            elif status == 'final_answer':
+            elif status == "final_answer":
                 print(f"Final Answer: {data}")
                 break
             else:

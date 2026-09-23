@@ -15,7 +15,7 @@ WORKDIR = "/testbed"
 EXEC_TIMEOUT = 120
 COMMAND_TIMEOUT = 300
 EVAL_TIMEOUT = int(os.environ.get("SWEBENCH_EVAL_TIMEOUT", "400"))
-MAX_TEST_OUTPUT = 12000
+MAX_TEST_OUTPUT = 20000  # increased: 12000 cut the traceback before it started
 
 
 class Testbed:
@@ -170,8 +170,16 @@ def read_file(filepath: str, start_line: int, end_line: int) -> str:
     lines = out.splitlines()
     total = len(lines)
     if start_line > end_line:
-        return "Error: start_line (%d) > end_line (%d)." % (start_line, end_line)
-    if start_line < 1 or end_line < 1 or start_line > total or end_line > total:
+        return "Error: start_line (%d) > end_line (%d)." % (
+            start_line,
+            end_line,
+        )
+    if (
+        start_line < 1
+        or end_line < 1
+        or start_line > total
+        or end_line > total
+    ):
         return "Error: lines %d-%d out of range (file has %d lines)." % (
             start_line,
             end_line,
@@ -208,9 +216,9 @@ def edit_file(filepath: str, old_str: str, new_str: str) -> str:
         try:
             compile(new_content, filepath, "exec")
         except SyntaxError as e:
-            warning = " WARNING: the file now has a syntax error " "(line %s: %s)." % (
-                e.lineno,
-                e.msg,
+            warning = (
+                " WARNING: the file now has a syntax error "
+                "(line %s: %s)." % (e.lineno, e.msg)
             )
 
     rc, _, err = _exec(
@@ -218,7 +226,11 @@ def edit_file(filepath: str, old_str: str, new_str: str) -> str:
     )
     if rc != 0:
         return "Error writing '%s': %s" % (filepath, err.strip())
-    return "Success: '%s' updated (%d replaced).%s" % (filepath, count, warning)
+    return "Success: '%s' updated (%d replaced).%s" % (
+        filepath,
+        count,
+        warning,
+    )
 
 
 @mcp.tool()
@@ -241,7 +253,10 @@ def search_code(pattern: str, file_pattern: str = "*") -> str:
     cmd = "grep -rnI"
     if file_pattern and file_pattern != "*":
         cmd += " --include=%s" % shlex.quote(file_pattern)
-    cmd += " -e %s %s 2>/dev/null" % (shlex.quote(pattern), shlex.quote(WORKDIR))
+    cmd += " -e %s %s 2>/dev/null" % (
+        shlex.quote(pattern),
+        shlex.quote(WORKDIR),
+    )
     _, out, _ = _exec(["sh", "-c", cmd])
     return _format_grep(out) or "No matches for '%s'." % pattern
 
@@ -275,7 +290,9 @@ def find_references(name: str, filepath: str, line: int) -> str:
 def run_command(command: str, workdir: str = WORKDIR) -> str:
     """Run a shell command in the container (stdout, stderr, exit code)."""
     rc, out, err = _exec(
-        ["sh", "-c", command], workdir=workdir or WORKDIR, timeout=COMMAND_TIMEOUT
+        ["sh", "-c", command],
+        workdir=workdir or WORKDIR,
+        timeout=COMMAND_TIMEOUT,
     )
     return "Exit Code: %d\n--- STDOUT ---\n%s\n--- STDERR ---\n%s" % (
         rc,
@@ -313,9 +330,91 @@ def run_tests() -> str:
 
 
 @mcp.tool()
+def run_failing_test(test_id: str) -> str:
+    """Run a single failing test with full traceback.
+
+    Use this immediately after run_tests() shows a FAILED line to get
+    the complete TypeError / AssertionError traceback.
+
+    Automatically picks the right test runner for the repo:
+    - pytest (sklearn, django, requests, …)
+    - bin/test (sympy)
+    - manage.py test (django fallback)
+
+    test_id examples (pytest style):
+      'sklearn/tests/test_pipeline.py::test_make_pipeline_memory'
+      'sympy/solvers/tests/test_diophantine.py::test_diophantine'
+    """
+    # Detect available python in the container
+    py_probe = (
+        "for py in /opt/miniconda3/envs/testbed/bin/python "
+        "/opt/miniconda3/bin/python python3 python; do "
+        "[ -x \"$py\" ] && echo \"$py\" && break; done"
+    )
+    _, py_out, _ = _exec(["sh", "-c", py_probe])
+    python = py_out.strip() or "python"
+
+    # Parse 'path/to/test_file.py::test_func' — works for pytest ids
+    parts = test_id.split("::")
+    test_file = parts[0]
+    test_func = parts[1] if len(parts) > 1 else None
+
+    # 1. Try pytest (most repos)
+    pytest_probe = (
+        "%s -m pytest --version > /dev/null 2>&1 && echo yes || echo no"
+        % python
+    )
+    _, probe_out, _ = _exec(["sh", "-c", pytest_probe])
+    has_pytest = probe_out.strip() == "yes"
+
+    if has_pytest:
+        cmd = "%s -m pytest -x --tb=long -rN %s 2>&1" % (
+            python,
+            shlex.quote(test_id),
+        )
+    else:
+        # 2. Sympy-style bin/test runner
+        bin_test = "%s/bin/test" % WORKDIR
+        rc_probe, _, _ = _exec(["test", "-f", bin_test])
+        if rc_probe == 0:
+            # bin/test takes the file path; filter by exact function name
+            # Prefix with '_' to prevent partial matches (sympy -k does
+            # substring matching, so 'test_foo' matches 'test_foobar' too)
+            filter_arg = (
+                " -k %s" % shlex.quote(test_func) if test_func else ""
+            )
+            cmd = "%s %s %s%s --no-cache 2>&1" % (
+                python,
+                shlex.quote(bin_test),
+                shlex.quote(test_file),
+                filter_arg,
+            )
+        else:
+            # 3. Generic fallback
+            cmd = "%s -m unittest %s 2>&1" % (python, shlex.quote(test_id))
+
+    rc, out, err = _exec(
+        ["sh", "-c", cmd],
+        workdir=WORKDIR,
+        timeout=COMMAND_TIMEOUT,
+    )
+    combined = out + ("\n" + err if err.strip() else "")
+    # Traceback is always at the end — keep the tail
+    if len(combined) > MAX_TEST_OUTPUT:
+        dropped = len(combined) - MAX_TEST_OUTPUT
+        combined = (
+            "... [%d earlier characters truncated]\n" % dropped
+            + combined[-MAX_TEST_OUTPUT:]
+        )
+    return combined
+
+
+@mcp.tool()
 def get_patch() -> str:
     """Return the git diff of every change made to the repo so far."""
-    rc, out, err = _exec(["git", "-c", "core.fileMode=false", "diff"], workdir=WORKDIR)
+    rc, out, err = _exec(
+        ["git", "-c", "core.fileMode=false", "diff"], workdir=WORKDIR
+    )
     if rc != 0:
         return "Error generating patch: %s" % err.strip()
     return out if out.strip() else "No changes made yet (empty diff)."

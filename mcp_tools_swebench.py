@@ -96,11 +96,6 @@ class Testbed:
 
     def cleanup(self) -> None:
         if self.container_name and self.owned:
-            subprocess.run(
-                ["docker", "rm", "-f", self.container_name],
-                capture_output=True,
-                text=True,
-            )
             self.container_name = None
 
 

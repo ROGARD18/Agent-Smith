@@ -1,31 +1,61 @@
-import json
 import argparse
-import subprocess
+import json
 import os
-import uuid
-import signal
-import sys
 from pathlib import Path
+import signal
+import subprocess
+import sys
+from types import FrameType
+from typing import Optional
+import uuid
+
 from dotenv import load_dotenv
 
-from src.sandbox import Sandbox, SandboxConfig
+from src.agent import AgentOrchestrator
 from src.llm import TokenManager
 from src.mcp_client import MCPClient
-from src.agent import AgentOrchestrator
 from src.models import SWEBenchTaskInput
+from src.sandbox import Sandbox, SandboxConfig
 
 load_dotenv()
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Agent Smith SWE-bench Solver")
+def get_docker_host() -> str:
+    """Return the Docker socket used by the current console context."""
+    try:
+        host = subprocess.check_output(
+            [
+                "docker",
+                "context",
+                "inspect",
+                "--format",
+                "{{.Endpoints.docker.Host}}",
+            ],
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+        if host:
+            return host
+    except subprocess.CalledProcessError:
+        pass
+    # Fall back to the standard socket
+    return os.environ.get(
+        "DOCKER_HOST", "unix:///var/run/docker.sock"
+    )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Agent Smith SWE-bench Solver"
+    )
     parser.add_argument(
         "--task-file", required=True, help="Path to the dumped task JSON file"
     )
     parser.add_argument(
         "--output", required=True, help="Path to save the SolutionOutput JSON"
     )
-    parser.add_argument("--model-name", required=True, help="LLM model identifier")
+    parser.add_argument(
+        "--model-name", required=True, help="LLM model identifier"
+    )
     parser.add_argument(
         "--provider-url", required=True, help="Base URL for the LLM API"
     )
@@ -35,32 +65,36 @@ def main():
         task_data = json.load(f)
     task = SWEBenchTaskInput(**task_data)
 
-    container_name = f"swe_agent_{task.instance_id}_{uuid.uuid4().hex[:8]}"
-    print(
-        f"[*] Starting Docker container: {container_name} " f"using {task.docker_image}"
-    )
+    # Resolve the Docker socket used by the current console so that
+    # subprocess calls target the same daemon as a manual `docker pull`.
+    docker_env = os.environ.copy()
+    docker_env["DOCKER_HOST"] = get_docker_host()
 
-    # Auto-pull Docker image if needed
-    print(f"[*] Checking image {task.docker_image} availability...")
+    # Pull image using the same Docker context as the console
+    print(f"[*] Pulling Docker image: {task.docker_image}...")
     try:
         subprocess.run(
-            ["docker", "image", "inspect", task.docker_image],
-            capture_output=True,
+            ["docker", "pull", task.docker_image],
             check=True,
+            env=docker_env,
         )
-        print("[*] Image already present locally. Skipping pull.")
-    except subprocess.CalledProcessError:
-        print(f"[*] Image not found locally. Pulling {task.docker_image}...")
-        try:
-            subprocess.run(["docker", "pull", task.docker_image], check=True)
-            print("[*] Pull complete!")
-        except subprocess.CalledProcessError as e:
-            print(f"[!] Warning: Failed to pull image. Error: {e}")
+        print("[*] Docker pull completed successfully.")
+    except subprocess.CalledProcessError as e:
+        print(f"[!] Warning: Failed to pull Docker image. Error: {e}")
+
+    container_name = (
+        f"swe_agent_{task.instance_id}_{uuid.uuid4().hex[:8]}"
+    )
+    print(
+        f"[*] Starting Docker container: {container_name} "
+        f"using {task.docker_image}"
+    )
 
     # Signal handler for clean Docker container cleanup
-    def signal_handler(sig, frame):
-        print(f"\n[*] Signal {sig} received. Cleaning up: {container_name}")
-        subprocess.run(["docker", "rm", "-f", container_name], capture_output=True)
+    def signal_handler(
+        sig: int, frame: Optional[FrameType]
+    ) -> None:
+        print(f"\n[*] Signal {sig} received.")
         sys.exit(128 + sig)
 
     signal.signal(signal.SIGTERM, signal_handler)
@@ -81,12 +115,15 @@ def main():
             ],
             check=True,
             capture_output=True,
+            env=docker_env,  # same Docker daemon as the pull
         )
 
-        server_env = os.environ.copy()
+        server_env = docker_env.copy()
         server_env["SWE_CONTAINER_NAME"] = container_name
         server_env["TESTBED_PATH"] = "/testbed"
-        server_env["SWEBENCH_TASK_FILE"] = str(Path(args.task_file).resolve())
+        server_env["SWEBENCH_TASK_FILE"] = str(
+            Path(args.task_file).resolve()
+        )
 
         mcp_client = MCPClient()
         mcp_tools_path = Path(__file__).parent / "mcp_tools_swebench.py"
@@ -110,7 +147,7 @@ def main():
         hints_section = ""
         if hasattr(task, "hints_text") and task.hints_text:
             hints_section = (
-                f"\nHINTS (from the issue discussion):\n" f"{task.hints_text}\n"
+                f"\nHINTS (from the issue discussion):\n{task.hints_text}\n"
             )
 
         system_prompt = (
@@ -118,7 +155,6 @@ def main():
             "You fix real bugs in real repositories.\n\n"
             "AVAILABLE TOOLS:\n"
             f"{sandbox_manual}\n\n"
-            "RESPONSE FORMAT (follow EXACTLY every time):\nExample Response:\nThought: I need to read the file.\nCode:\n```python\nprint(read_file('/testbed/file.py', 1, 10))\n```\n\n"
             "Thought: <1-3 sentences of reasoning>\n"
             "Code:\n"
             "```python\n"
@@ -160,7 +196,9 @@ def main():
             "explore the codebase to understand and fix the bug."
         )
 
-        orchestrator = AgentOrchestrator(sandbox, token_manager, args.model_name)
+        orchestrator = AgentOrchestrator(
+            sandbox, token_manager, args.model_name
+        )
         solution_output = orchestrator.run(
             task_id=task.instance_id,
             benchmark="swebench",
@@ -177,7 +215,11 @@ def main():
             try:
                 print("[*] Attempting to salvage partial patch...")
                 patch = mcp_client.call_tool("get_patch", {})
-                if patch and patch.strip() and "No changes made yet" not in patch:
+                if (
+                    patch
+                    and patch.strip()
+                    and "No changes made yet" not in patch
+                ):
                     solution_output.solution = patch
             except Exception as e:
                 print(f"[!] Failed to salvage patch: {e}")
@@ -189,8 +231,6 @@ def main():
         print(f"[*] Solution saved to {output_path}")
 
     finally:
-        print(f"[*] Cleaning up Docker container: {container_name}")
-        subprocess.run(["docker", "rm", "-f", container_name], capture_output=True)
         if "mcp_client" in locals():
             mcp_client.cleanup()
 
